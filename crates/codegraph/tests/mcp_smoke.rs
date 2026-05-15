@@ -1,0 +1,99 @@
+use serde_json::Value;
+use std::fs;
+use std::io::Write;
+use std::process::{Command, Stdio};
+use tempfile::TempDir;
+
+#[test]
+fn mcp_lists_and_calls_status() {
+    let dir = TempDir::new().unwrap();
+    fs::create_dir_all(dir.path().join("src")).unwrap();
+    fs::write(dir.path().join("src/lib.rs"), "pub fn process_data() {}\n").unwrap();
+
+    let bin = env!("CARGO_BIN_EXE_codegraph");
+    assert!(Command::new(bin)
+        .args(["init", dir.path().to_str().unwrap(), "--index"])
+        .status()
+        .unwrap()
+        .success());
+
+    let mut child = Command::new(bin)
+        .args(["serve", "--mcp", "--path", dir.path().to_str().unwrap()])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    {
+        let stdin = child.stdin.as_mut().unwrap();
+        writeln!(
+            stdin,
+            "{}",
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": { "rootUri": format!("file://{}", dir.path().display()) }
+            })
+        )
+        .unwrap();
+        writeln!(
+            stdin,
+            "{}",
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/list"
+            })
+        )
+        .unwrap();
+        writeln!(
+            stdin,
+            "{}",
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/call",
+                "params": {
+                    "name": "codegraph_status",
+                    "arguments": {}
+                }
+            })
+        )
+        .unwrap();
+        writeln!(
+            stdin,
+            "{}",
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 4,
+                "method": "tools/call",
+                "params": {
+                    "name": "codegraph_search",
+                    "arguments": { "query": "process_data" }
+                }
+            })
+        )
+        .unwrap();
+    }
+
+    drop(child.stdin.take());
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let responses: Vec<Value> = stdout
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(responses[0]["result"]["serverInfo"]["name"], "codegraph");
+    let tools = responses[1]["result"]["tools"].as_array().unwrap();
+    assert!(tools.iter().any(|tool| tool["name"] == "codegraph_search"));
+    assert!(responses[2]["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("Files indexed"));
+    assert!(responses[3]["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("process_data"));
+}
