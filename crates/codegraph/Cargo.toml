@@ -11,7 +11,7 @@ name = "codegraph"
 path = "src/lib.rs"
 
 [[bin]]
-name = "codegraph"
+name = "cgz"
 path = "src/main.rs"
 
 [dependencies]

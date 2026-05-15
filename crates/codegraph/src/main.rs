@@ -5,7 +5,7 @@ use codegraph::{find_nearest_codegraph_root, is_initialized, CodeGraph};
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(name = "codegraph")]
+#[command(name = "cgz")]
 #[command(about = "Code intelligence and knowledge graph for any codebase")]
 struct Cli {
     #[command(subcommand)]
@@ -91,7 +91,7 @@ fn main() -> Result<()> {
                 let result = cg.index_all()?;
                 print_index_result(&result);
             } else {
-                println!("Run `codegraph index` to index the project");
+                println!("Run `cgz index` to index the project");
             }
         }
         Command::Uninit { path, force } => {
@@ -248,7 +248,7 @@ fn main() -> Result<()> {
             println!("Unlocked");
         }
         Command::Install => {
-            println!("Rust CodeGraph installer is not implemented yet. Run `codegraph init -i` in a project.");
+            println!("Rust CodeGraph installer is not implemented yet. Run `cgz init -i` in a project.");
         }
     }
     Ok(())

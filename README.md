@@ -28,7 +28,7 @@ npx @colbymchenry/codegraph
 
 ```bash
 cd your-project
-codegraph init -i
+cgz init -i
 ```
 
 ![1_C_VYnhpys0UHrOuOgpgoyw](https://github.com/user-attachments/assets/f168182f-4d9a-44e0-94d7-08d018cc8a3a)
@@ -149,7 +149,7 @@ npx @colbymchenry/codegraph
 ```
 
 The installer will:
-- Prompt to install `codegraph` globally (needed for the MCP server)
+- Prompt to install `cgz` globally (needed for the MCP server)
 - Configure the MCP server in `~/.claude.json`
 - Set up auto-allow permissions for CodeGraph tools
 - Add global instructions to `~/.claude/CLAUDE.md`
@@ -163,7 +163,7 @@ Restart Claude Code for the MCP server to load.
 
 ```bash
 cd your-project
-codegraph init -i
+cgz init -i
 ```
 
 That's it! Claude Code will use CodeGraph tools automatically when a `.codegraph/` directory exists.
@@ -182,7 +182,7 @@ npm install -g @colbymchenry/codegraph
   "mcpServers": {
     "codegraph": {
       "type": "stdio",
-      "command": "codegraph",
+      "command": "cgz",
       "args": ["serve", "--mcp"]
     }
   }
@@ -245,7 +245,7 @@ CodeGraph builds a semantic knowledge graph of codebases for faster, smarter cod
 
 At the start of a session, ask the user if they'd like to initialize CodeGraph:
 
-"I notice this project doesn't have CodeGraph initialized. Would you like me to run `codegraph init -i` to build a code knowledge graph?"
+"I notice this project doesn't have CodeGraph initialized. Would you like me to run `cgz init -i` to build a code knowledge graph?"
 ```
 
 </details>
@@ -299,28 +299,28 @@ At the start of a session, ask the user if they'd like to initialize CodeGraph:
 ## CLI Reference
 
 ```bash
-codegraph                         # Run interactive installer
-codegraph install                 # Run installer (explicit)
-codegraph init [path]             # Initialize in a project (--index to also index)
-codegraph uninit [path]           # Remove CodeGraph from a project (--force to skip prompt)
-codegraph index [path]            # Full index (--force to re-index, --quiet for less output)
-codegraph sync [path]             # Incremental update
-codegraph status [path]           # Show statistics
-codegraph query <search>          # Search symbols (--kind, --limit, --json)
-codegraph files [path]            # Show file structure (--format, --filter, --max-depth, --json)
-codegraph context <task>          # Build context for AI (--format, --max-nodes)
-codegraph affected [files...]     # Find test files affected by changes (see below)
-codegraph serve --mcp             # Start MCP server
+cgz                         # Run interactive installer
+cgz install                 # Run installer (explicit)
+cgz init [path]             # Initialize in a project (--index to also index)
+cgz uninit [path]           # Remove CodeGraph from a project (--force to skip prompt)
+cgz index [path]            # Full index (--force to re-index, --quiet for less output)
+cgz sync [path]             # Incremental update
+cgz status [path]           # Show statistics
+cgz query <search>          # Search symbols (--kind, --limit, --json)
+cgz files [path]            # Show file structure (--format, --filter, --max-depth, --json)
+cgz context <task>          # Build context for AI (--format, --max-nodes)
+cgz affected [files...]     # Find test files affected by changes (see below)
+cgz serve --mcp             # Start MCP server
 ```
 
-### `codegraph affected`
+### `cgz affected`
 
 Traces import dependencies transitively to find which test files are affected by changed source files.
 
 ```bash
-codegraph affected src/utils.ts src/api.ts         # Pass files as arguments
-git diff --name-only | codegraph affected --stdin   # Pipe from git diff
-codegraph affected src/auth.ts --filter "e2e/*"     # Custom test file pattern
+cgz affected src/utils.ts src/api.ts         # Pass files as arguments
+git diff --name-only | cgz affected --stdin   # Pipe from git diff
+cgz affected src/auth.ts --filter "e2e/*"     # Custom test file pattern
 ```
 
 | Option | Description | Default |
@@ -335,7 +335,7 @@ codegraph affected src/auth.ts --filter "e2e/*"     # Custom test file pattern
 
 ```bash
 #!/usr/bin/env bash
-AFFECTED=$(git diff --name-only HEAD | codegraph affected --stdin --quiet)
+AFFECTED=$(git diff --name-only HEAD | cgz affected --stdin --quiet)
 if [ -n "$AFFECTED" ]; then
   npx vitest run $AFFECTED
 fi
@@ -435,11 +435,11 @@ The `.codegraph/config.json` file controls indexing:
 
 ## Troubleshooting
 
-**"CodeGraph not initialized"** — Run `codegraph init` in your project directory first.
+**"CodeGraph not initialized"** — Run `cgz init` in your project directory first.
 
 **Indexing is slow** — Check that `node_modules` and other large directories are excluded. Use `--quiet` to reduce output overhead.
 
-**Indexing is slow / MCP `database is locked` / WASM fallback active** — `codegraph` ships with a WASM SQLite fallback for environments where `better-sqlite3` (a native module, declared as `optionalDependencies`) can't install. The fallback is 5-10x slower than the native backend and uses a journal mode that lets writers block readers, so MCP queries can also hit `database is locked` while indexing runs. Run `codegraph status` and look at the `Backend:` line:
+**Indexing is slow / MCP `database is locked` / WASM fallback active** — `cgz` ships with a WASM SQLite fallback for environments where `better-sqlite3` (a native module, declared as `optionalDependencies`) can't install. The fallback is 5-10x slower than the native backend and uses a journal mode that lets writers block readers, so MCP queries can also hit `database is locked` while indexing runs. Run `cgz status` and look at the `Backend:` line:
 
 - `Backend: native` — you're on the fast path, nothing to do.
 - `Backend: wasm` — you're on the slow fallback. Common causes: missing C build tools, prebuilt binary unavailable for your Node version, or your Node version changed after install. Fix:
@@ -461,11 +461,11 @@ The `.codegraph/config.json` file controls indexing:
   npm install better-sqlite3 --save
   ```
 
-  After the fix, `codegraph status` should show `Backend: native`.
+  After the fix, `cgz status` should show `Backend: native`.
 
-**MCP server not connecting** — Ensure the project is initialized/indexed, verify the path in your MCP config, and check that `codegraph serve --mcp` works from the command line.
+**MCP server not connecting** — Ensure the project is initialized/indexed, verify the path in your MCP config, and check that `cgz serve --mcp` works from the command line.
 
-**Missing symbols** — The MCP server auto-syncs on save (wait a couple seconds). Run `codegraph sync` manually if needed. Check that the file's language is supported and isn't excluded by config patterns.
+**Missing symbols** — The MCP server auto-syncs on save (wait a couple seconds). Run `cgz sync` manually if needed. Check that the file's language is supported and isn't excluded by config patterns.
 
 ## License
 

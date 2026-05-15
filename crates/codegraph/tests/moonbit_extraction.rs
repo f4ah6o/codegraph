@@ -4,7 +4,7 @@ use std::process::Command;
 use tempfile::TempDir;
 
 fn run(args: &[&str]) -> String {
-    let bin = env!("CARGO_BIN_EXE_codegraph");
+    let bin = env!("CARGO_BIN_EXE_cgz");
     let output = Command::new(bin)
         .args(args)
         .output()

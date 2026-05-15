@@ -61,7 +61,7 @@ fn run_ts(args: &[&str]) -> String {
 }
 
 fn run_rust(args: &[&str]) -> String {
-    let bin = env!("CARGO_BIN_EXE_codegraph");
+    let bin = env!("CARGO_BIN_EXE_cgz");
     let output = Command::new(bin)
         .args(args)
         .output()

@@ -10,7 +10,7 @@ fn mcp_lists_and_calls_status() {
     fs::create_dir_all(dir.path().join("src")).unwrap();
     fs::write(dir.path().join("src/lib.rs"), "pub fn process_data() {}\n").unwrap();
 
-    let bin = env!("CARGO_BIN_EXE_codegraph");
+    let bin = env!("CARGO_BIN_EXE_cgz");
     assert!(Command::new(bin)
         .args(["init", dir.path().to_str().unwrap(), "--index"])
         .status()
