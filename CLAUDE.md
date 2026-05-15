@@ -142,7 +142,7 @@ CodeGraph provides **code context**, not product requirements. For new features,
 ## Releases
 
 Releases are published to npm **and** mirrored as GitHub Releases on the
-[Releases page](https://github.com/colbymchenry/codegraph/releases), which is
+[Releases page](https://github.com/f4ah6o/codegraph/releases), which is
 where most users look for change history. `CHANGELOG.md` at the repo root is
 the source of truth — each GitHub Release's notes are extracted from it.
 
@@ -158,7 +158,7 @@ When the user asks for a changelog entry for a new version:
    Lead with the observable symptom or capability, then mention internals only
    if a user needs them (e.g., to work around an existing bad install).
 4. Add the link reference at the bottom:
-   `[X.Y.Z]: https://github.com/colbymchenry/codegraph/releases/tag/vX.Y.Z`
+   `[X.Y.Z]: https://github.com/f4ah6o/codegraph/releases/tag/vX.Y.Z`
 
 ### Release commands (the user runs these)
 

@@ -477,6 +477,6 @@ MIT
 
 **Made for the Claude Code community**
 
-[Report Bug](https://github.com/colbymchenry/codegraph/issues) · [Request Feature](https://github.com/colbymchenry/codegraph/issues)
+[Report Bug](https://github.com/f4ah6o/codegraph/issues) · [Request Feature](https://github.com/f4ah6o/codegraph/issues)
 
 </div>
