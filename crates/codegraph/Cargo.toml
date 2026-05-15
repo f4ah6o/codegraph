@@ -1,6 +1,6 @@
 [package]
 name = "codegraph"
-version = "0.8.0"
+version = "2026.5.16"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
