@@ -246,20 +246,6 @@ impl Database {
         let db_size_bytes = std::fs::metadata(&self.path)
             .map(|m| m.len() as i64)
             .unwrap_or_default();
-        let oldest_indexed_at =
-            self.conn
-                .query_row("SELECT MIN(indexed_at) FROM files", [], |r| r.get(0))?;
-        let last_indexed_at =
-            self.conn
-                .query_row("SELECT MAX(indexed_at) FROM files", [], |r| r.get(0))?;
-        let newest_modified_at =
-            self.conn
-                .query_row("SELECT MAX(modified_at) FROM files", [], |r| r.get(0))?;
-        let stale_file_count = self.conn.query_row(
-            "SELECT COUNT(*) FROM files WHERE modified_at > indexed_at",
-            [],
-            |r| r.get(0),
-        )?;
         let files_by_language = grouped_counts(
             &self.conn,
             "SELECT language, COUNT(*) FROM files GROUP BY language",
@@ -271,10 +257,6 @@ impl Database {
             node_count,
             edge_count,
             db_size_bytes,
-            oldest_indexed_at,
-            last_indexed_at,
-            newest_modified_at,
-            stale_file_count,
             files_by_language,
             nodes_by_kind,
         })
@@ -286,7 +268,6 @@ impl Database {
         } else {
             options.limit
         };
-        let fetch_limit = (limit * 5).max(limit).min(500);
         let pattern = format!("%{}%", query);
         let exact = query.to_string();
         let prefix = format!("{}%", query);
@@ -308,7 +289,7 @@ impl Database {
                         l.as_str(),
                         exact,
                         prefix,
-                        fetch_limit
+                        limit
                     ],
                     node_from_row,
                 )?)?;
@@ -326,7 +307,7 @@ impl Database {
                         k.as_str(),
                         exact,
                         prefix,
-                        fetch_limit
+                        limit
                     ],
                     node_from_row,
                 )?)?;
@@ -344,7 +325,7 @@ impl Database {
                         l.as_str(),
                         exact,
                         prefix,
-                        fetch_limit
+                        limit
                     ],
                     node_from_row,
                 )?)?;
@@ -354,37 +335,16 @@ impl Database {
                 let sql = format!("{base} WHERE (name LIKE ? OR qualified_name LIKE ? OR signature LIKE ? OR file_path LIKE ?){order}");
                 let mut stmt = self.conn.prepare(&sql)?;
                 let nodes = collect_nodes(stmt.query_map(
-                    params![
-                        pattern,
-                        pattern,
-                        pattern,
-                        pattern,
-                        exact,
-                        prefix,
-                        fetch_limit
-                    ],
+                    params![pattern, pattern, pattern, pattern, exact, prefix, limit],
                     node_from_row,
                 )?)?;
                 nodes
             }
         };
-        let mut results = rows
+        Ok(rows
             .into_iter()
-            .map(|node| SearchResult {
-                score: search_score(query, &node),
-                node,
-            })
-            .collect::<Vec<_>>();
-        results.sort_by(|a, b| {
-            b.score
-                .partial_cmp(&a.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| a.node.name.len().cmp(&b.node.name.len()))
-                .then_with(|| a.node.file_path.cmp(&b.node.file_path))
-                .then_with(|| a.node.start_line.cmp(&b.node.start_line))
-        });
-        results.truncate(limit as usize);
-        Ok(results)
+            .map(|node| SearchResult { node, score: 1.0 })
+            .collect())
     }
 
     pub fn get_node(&self, id: &str) -> Result<Option<Node>> {
@@ -569,32 +529,6 @@ fn edge_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Edge> {
         col: row.get(5)?,
         provenance: row.get(6)?,
     })
-}
-
-fn search_score(query: &str, node: &Node) -> f64 {
-    let query = query.to_ascii_lowercase();
-    let name = node.name.to_ascii_lowercase();
-    let qualified = node.qualified_name.to_ascii_lowercase();
-    let file_path = node.file_path.to_ascii_lowercase();
-    let signature = node
-        .signature
-        .as_deref()
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-
-    if name == query {
-        100.0
-    } else if name.starts_with(&query) {
-        90.0
-    } else if qualified.contains(&query) {
-        80.0
-    } else if file_path.contains(&query) {
-        70.0
-    } else if signature.contains(&query) {
-        60.0
-    } else {
-        10.0
-    }
 }
 
 fn parse_kind(s: &str) -> NodeKind {

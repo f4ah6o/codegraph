@@ -33,9 +33,7 @@ agent planning and code navigation:
 cgz files --path <path>
 cgz query --path <path> <symbol-or-file-term>
 cgz context --path <path> "<task or symbol>"
-cgz context --path <path> "<task or symbol>" --json
 cgz affected --path <path> <changed-file>...
-cgz affected --path <path> <changed-file>... --json
 ```
 
 For changed files from Git:
@@ -47,16 +45,6 @@ git diff --name-only | xargs cgz affected --path <path>
 `cgz context` and `cgz query` work best with concrete symbol names, file names,
 package names, and short domain terms. Natural-language task descriptions are
 accepted, but agents should still inspect the returned files before editing.
-Use `cgz context --json` when a machine-readable list of matched terms, files,
-symbols, and match reasons is more useful than markdown context.
-For MCP clients, call `codegraph_context` with `format: "json"` for the same
-structured report.
-Use `cgz affected --json` when planning verification; its `debug[].matchedBy`
-field separates direct test inputs, import-dependent tests, MoonBit
-same-package tests, Rust name-heuristic test matches, and Rust workspace test
-matches.
-For MCP clients, call `codegraph_affected` with a `files` array to get the same
-affected-test report.
 
 ## Verification Boundary
 
@@ -66,6 +54,3 @@ commands such as tests, type checks, linters, or build commands.
 
 If results look stale or incomplete, run `cgz status <path>` again and ask for an
 explicit indexing step before relying on the graph.
-`cgz status --json` includes `last_indexed_at`, `oldest_indexed_at`,
-`newest_modified_at`, and `stale_file_count` so agents can report whether an
-index appears fresh before using graph results.

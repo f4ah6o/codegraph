@@ -11,14 +11,10 @@ use db::Database;
 use extraction::{detect_language, extract_from_source, should_include_file};
 use graph::{GraphTraverser, Subgraph};
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use types::{
-    AffectedDebugEntry, AffectedMatchSources, AffectedReport, ContextFileSummary, ContextMatch,
-    ContextReport, ContextSymbolSummary, FileRecord, GraphStats, IndexResult, Language, Node,
-    NodeEdge, SearchOptions, SearchResult,
-};
+use types::{FileRecord, GraphStats, IndexResult, Node, NodeEdge, SearchOptions, SearchResult};
 
 pub const CODEGRAPH_DIR: &str = ".codegraph";
 pub const DATABASE_FILE: &str = "codegraph.db";
@@ -150,106 +146,16 @@ impl CodeGraph {
         self.db.get_all_files()
     }
 
-    pub fn build_affected_report(&self, files: &[String]) -> Result<AffectedReport> {
-        let indexed_files = self.get_all_files()?;
-        let mut affected = BTreeSet::new();
-        let mut debug = Vec::new();
-        let mut warnings = Vec::new();
-
-        for file in files {
-            if is_test_file(file) {
-                affected.insert(file.clone());
-                debug.push(AffectedDebugEntry {
-                    changed_file: file.clone(),
-                    reason: "changed file is a test file".to_string(),
-                    matched_tests: vec![file.clone()],
-                    matched_by: AffectedMatchSources {
-                        direct_test_input: vec![file.clone()],
-                        import_dependents: Vec::new(),
-                        moonbit_same_package: Vec::new(),
-                        rust_name_heuristic: Vec::new(),
-                        rust_workspace_heuristic: Vec::new(),
-                    },
-                });
-                continue;
-            }
-
-            let mut matched = BTreeSet::new();
-            let mut import_dependents = BTreeSet::new();
-            for dep in self.get_file_dependents(file)? {
-                if is_test_file(&dep) {
-                    import_dependents.insert(dep.clone());
-                    matched.insert(dep.clone());
-                    affected.insert(dep);
-                }
-            }
-
-            let moonbit_tests: BTreeSet<String> = moonbit_same_package_tests(file, &indexed_files)
-                .into_iter()
-                .collect();
-            for test in &moonbit_tests {
-                matched.insert(test.clone());
-                affected.insert(test.clone());
-            }
-            let rust_tests: BTreeSet<String> = rust_name_heuristic_tests(file, &indexed_files)
-                .into_iter()
-                .collect();
-            for test in &rust_tests {
-                matched.insert(test.clone());
-                affected.insert(test.clone());
-            }
-            let rust_workspace_tests: BTreeSet<String> =
-                rust_workspace_heuristic_tests(&self.root, file, &indexed_files)
-                    .into_iter()
-                    .collect();
-            for test in &rust_workspace_tests {
-                matched.insert(test.clone());
-                affected.insert(test.clone());
-            }
-
-            if matched.is_empty() {
-                warnings.push(format!(
-                    "{file}: no import-dependent tests, MoonBit same-package tests, Rust name-heuristic tests, or Rust workspace tests found"
-                ));
-            }
-            debug.push(AffectedDebugEntry {
-                changed_file: file.clone(),
-                reason: if matched.is_empty() {
-                    "no import-dependent tests, MoonBit same-package tests, Rust name-heuristic tests, or Rust workspace tests found".to_string()
-                } else {
-                    "matched import-dependent tests, MoonBit same-package tests, Rust name-heuristic tests, and/or Rust workspace tests".to_string()
-                },
-                matched_tests: matched.into_iter().collect(),
-                matched_by: AffectedMatchSources {
-                    direct_test_input: Vec::new(),
-                    import_dependents: import_dependents.into_iter().collect(),
-                    moonbit_same_package: moonbit_tests.into_iter().collect(),
-                    rust_name_heuristic: rust_tests.into_iter().collect(),
-                    rust_workspace_heuristic: rust_workspace_tests.into_iter().collect(),
-                },
-            });
-        }
-
-        Ok(AffectedReport {
-            changed_files: files.to_vec(),
-            affected_tests: affected.into_iter().collect(),
-            debug,
-            warnings,
-        })
-    }
-
     pub fn build_context(&self, task: &str, max_nodes: i64, include_code: bool) -> Result<String> {
-        let report = self.build_context_report(task, max_nodes, include_code)?;
+        let results = self.find_context_nodes(task, max_nodes)?;
         let mut out = format!("## Context: {task}\n\n");
-        if report.matches.is_empty() {
-            for warning in &report.warnings {
-                out.push_str(warning);
-                out.push('\n');
-            }
+        if results.is_empty() {
+            out.push_str("No matching symbols or files were found.\n\n");
+            out.push_str("Try a concrete symbol name, file name, package/module name, or a shorter code term. ");
+            out.push_str("For candidate discovery, run `cgz query --json <term>`.\n");
             return Ok(out);
         }
-
-        for result in report.matches {
+        for result in results {
             let n = result.node;
             out.push_str(&format!(
                 "- `{}` `{}` at `{}:{}`",
@@ -259,101 +165,34 @@ impl CodeGraph {
                 out.push_str(&format!(" — `{}`", sig.replace('\n', " ")));
             }
             out.push('\n');
-            if let Some(code) = result.code {
-                out.push_str("\n```");
-                out.push_str(n.language.as_str());
-                out.push('\n');
-                out.push_str(&code);
-                if !code.ends_with('\n') {
+            if include_code {
+                if let Ok(code) = self.read_node_source(&n) {
+                    out.push_str("\n```");
+                    out.push_str(n.language.as_str());
                     out.push('\n');
+                    out.push_str(&code);
+                    if !code.ends_with('\n') {
+                        out.push('\n');
+                    }
+                    out.push_str("```\n\n");
                 }
-                out.push_str("```\n\n");
             }
         }
         Ok(out)
     }
 
-    pub fn build_context_report(
-        &self,
-        task: &str,
-        max_nodes: i64,
-        include_code: bool,
-    ) -> Result<ContextReport> {
-        let query = task.trim().to_string();
-        let search_terms = context_search_terms(task);
-        let results = self.find_context_nodes(&search_terms, max_nodes)?;
-        let mut matches = Vec::new();
-        let mut files: BTreeMap<String, ContextFileSummary> = BTreeMap::new();
-        let mut symbols = Vec::new();
-
-        for (result, search_term) in results {
-            let code = if include_code {
-                self.read_node_source(&result.node).ok()
-            } else {
-                None
-            };
-            let file = files
-                .entry(result.node.file_path.clone())
-                .or_insert_with(|| ContextFileSummary {
-                    path: result.node.file_path.clone(),
-                    language: result.node.language,
-                    match_count: 0,
-                    symbols: Vec::new(),
-                });
-            file.match_count += 1;
-            if !file.symbols.iter().any(|name| name == &result.node.name) {
-                file.symbols.push(result.node.name.clone());
-            }
-            symbols.push(ContextSymbolSummary {
-                name: result.node.name.clone(),
-                kind: result.node.kind,
-                file_path: result.node.file_path.clone(),
-                start_line: result.node.start_line,
-            });
-            matches.push(ContextMatch {
-                reason: context_match_reason(task, &search_term),
-                search_term,
-                score: result.score,
-                node: result.node,
-                code,
-            });
-        }
-
-        let mut warnings = Vec::new();
-        if matches.is_empty() {
-            warnings.push("No matching symbols or files were found.".to_string());
-            warnings.push(
-                "Try a concrete symbol name, file name, package/module name, or a shorter code term. For candidate discovery, run `cgz query --json <term>`."
-                    .to_string(),
-            );
-        }
-
-        Ok(ContextReport {
-            query,
-            search_terms,
-            matches,
-            files: files.into_values().collect(),
-            symbols,
-            warnings,
-        })
-    }
-
-    fn find_context_nodes(
-        &self,
-        search_terms: &[String],
-        max_nodes: i64,
-    ) -> Result<Vec<(SearchResult, String)>> {
+    fn find_context_nodes(&self, task: &str, max_nodes: i64) -> Result<Vec<SearchResult>> {
         let limit = max_nodes.max(1);
         let mut out = Vec::new();
         let mut seen = BTreeSet::new();
 
-        for term in search_terms {
+        for term in context_search_terms(task) {
             if out.len() >= limit as usize {
                 break;
             }
             let remaining = limit - out.len() as i64;
             let results = self.search_nodes(
-                term,
+                &term,
                 SearchOptions {
                     limit: remaining,
                     ..Default::default()
@@ -361,7 +200,7 @@ impl CodeGraph {
             )?;
             for result in results {
                 if seen.insert(result.node.id.clone()) {
-                    out.push((result, term.clone()));
+                    out.push(result);
                     if out.len() >= limit as usize {
                         break;
                     }
@@ -433,14 +272,6 @@ fn context_search_terms(task: &str) -> Vec<String> {
     terms
 }
 
-fn context_match_reason(task: &str, search_term: &str) -> String {
-    if task.trim().eq_ignore_ascii_case(search_term) {
-        "matched the full context query".to_string()
-    } else {
-        format!("matched extracted task term `{search_term}`")
-    }
-}
-
 fn push_context_term(term: &str, terms: &mut Vec<String>, seen: &mut BTreeSet<String>) {
     if term.is_empty() {
         return;
@@ -463,7 +294,6 @@ fn is_useful_context_term(term: &str) -> bool {
         || term.contains('.')
         || term.contains(':')
         || term.chars().any(|c| c.is_ascii_digit())
-        || term.chars().any(|c| c.is_ascii_uppercase())
         || term.len() >= 5
 }
 
@@ -483,11 +313,8 @@ const CONTEXT_STOP_WORDS: &[&str] = &[
     "fix",
     "from",
     "handle",
-    "how",
     "implement",
-    "implemented",
     "invalid",
-    "is",
     "issue",
     "order",
     "query",
@@ -499,12 +326,8 @@ const CONTEXT_STOP_WORDS: &[&str] = &[
     "update",
     "valid",
     "validation",
-    "what",
     "when",
     "where",
-    "which",
-    "who",
-    "why",
     "with",
 ];
 
@@ -547,146 +370,4 @@ fn system_time_ms(t: std::time::SystemTime) -> Option<i64> {
     t.duration_since(std::time::UNIX_EPOCH)
         .ok()
         .map(|d| d.as_millis() as i64)
-}
-
-fn is_test_file(file: &str) -> bool {
-    let basename = file.rsplit('/').next().unwrap_or(file);
-    file.ends_with(".mbt.md")
-        || basename.ends_with("_test.mbt")
-        || basename.ends_with("_wbtest.mbt")
-        || file.contains("/__tests__/")
-        || file.contains("/test/")
-        || file.contains("/tests/")
-        || file.contains("/e2e/")
-        || file.contains("/spec/")
-        || file.contains(".test.")
-        || file.contains(".spec.")
-}
-
-fn moonbit_same_package_tests(file: &str, indexed_files: &[FileRecord]) -> Vec<String> {
-    if is_test_file(file) || !is_moonbit_source_file(file) {
-        return Vec::new();
-    }
-    let Some(package_dir) = moonbit_package_dir(file, indexed_files) else {
-        return Vec::new();
-    };
-    indexed_files
-        .iter()
-        .filter(|record| record.language == Language::MoonBit)
-        .filter(|record| is_test_file(&record.path))
-        .filter(|record| {
-            moonbit_package_dir(&record.path, indexed_files).as_deref() == Some(&package_dir)
-        })
-        .map(|record| record.path.clone())
-        .collect()
-}
-
-fn is_moonbit_source_file(file: &str) -> bool {
-    file.ends_with(".mbt") || file.ends_with(".mbti") || file.ends_with(".mbt.md")
-}
-
-fn moonbit_package_dir(file: &str, indexed_files: &[FileRecord]) -> Option<String> {
-    let mut best: Option<&str> = None;
-    for record in indexed_files {
-        if !record.path.ends_with("moon.pkg.json") && !record.path.ends_with("moon.pkg") {
-            continue;
-        }
-        let dir = record
-            .path
-            .rsplit_once('/')
-            .map(|(dir, _)| dir)
-            .unwrap_or("");
-        if (dir.is_empty() || file == dir || file.starts_with(&format!("{dir}/")))
-            && best
-                .map(|current| dir.len() > current.len())
-                .unwrap_or(true)
-        {
-            best = Some(dir);
-        }
-    }
-    best.map(str::to_string)
-}
-
-fn rust_name_heuristic_tests(file: &str, indexed_files: &[FileRecord]) -> Vec<String> {
-    let Some(changed) = indexed_files.iter().find(|record| record.path == file) else {
-        return Vec::new();
-    };
-    if changed.language != Language::Rust || is_test_file(file) {
-        return Vec::new();
-    }
-    let Some(stem) = file
-        .rsplit('/')
-        .next()
-        .and_then(|name| name.strip_suffix(".rs"))
-    else {
-        return Vec::new();
-    };
-    if stem.len() < 3 {
-        return Vec::new();
-    }
-    indexed_files
-        .iter()
-        .filter(|record| record.language == Language::Rust)
-        .filter(|record| is_test_file(&record.path))
-        .filter(|record| rust_test_path_matches_stem(&record.path, stem))
-        .map(|record| record.path.clone())
-        .collect()
-}
-
-fn rust_test_path_matches_stem(test_path: &str, stem: &str) -> bool {
-    test_path
-        .rsplit('/')
-        .next()
-        .unwrap_or(test_path)
-        .strip_suffix(".rs")
-        .map(|name| {
-            name == stem
-                || name.ends_with(&format!("_{stem}"))
-                || name.starts_with(&format!("{stem}_"))
-                || name.contains(&format!("_{stem}_"))
-        })
-        .unwrap_or(false)
-}
-
-fn rust_workspace_heuristic_tests(
-    root: &Path,
-    file: &str,
-    indexed_files: &[FileRecord],
-) -> Vec<String> {
-    let Some(changed) = indexed_files.iter().find(|record| record.path == file) else {
-        return Vec::new();
-    };
-    if changed.language != Language::Rust || is_test_file(file) {
-        return Vec::new();
-    }
-    let Some(crate_root) = rust_crate_root(file) else {
-        return Vec::new();
-    };
-    indexed_files
-        .iter()
-        .filter(|record| record.language == Language::Rust)
-        .filter(|record| record.path != file)
-        .filter(|record| rust_crate_root(&record.path).as_deref() == Some(crate_root.as_str()))
-        .filter(|record| {
-            is_test_file(&record.path) || rust_file_contains_inline_tests(root, &record.path)
-        })
-        .map(|record| record.path.clone())
-        .collect()
-}
-
-fn rust_crate_root(file: &str) -> Option<String> {
-    let parts: Vec<&str> = file.split('/').collect();
-    if parts.len() >= 2 && parts[0] == "crates" {
-        return Some(format!("{}/{}", parts[0], parts[1]));
-    }
-    parts
-        .iter()
-        .position(|part| *part == "src")
-        .map(|index| parts[..index].join("/"))
-}
-
-fn rust_file_contains_inline_tests(root: &Path, file: &str) -> bool {
-    fs::read_to_string(root.join(file))
-        .map(|text| text.contains("#[cfg(test)]") || text.contains("#[test]"))
-        .unwrap_or(false)
 }
