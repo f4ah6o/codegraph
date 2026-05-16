@@ -62,6 +62,8 @@ enum Command {
         task: String,
         #[arg(short, long)]
         path: Option<PathBuf>,
+        #[arg(short, long)]
+        json: bool,
     },
     Affected {
         files: Vec<String>,
@@ -199,10 +201,17 @@ fn main() -> Result<()> {
                 }
             }
         }
-        Command::Context { task, path } => {
+        Command::Context { task, path, json } => {
             let root = resolve_root(path)?;
             let cg = CodeGraph::open(root)?;
-            println!("{}", cg.build_context(&task, 20, true)?);
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&cg.build_context_report(&task, 20, true)?)?
+                );
+            } else {
+                println!("{}", cg.build_context(&task, 20, true)?);
+            }
         }
         Command::Affected { files, path, json } => {
             let root = resolve_root(path)?;

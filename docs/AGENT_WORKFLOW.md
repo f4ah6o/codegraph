@@ -33,6 +33,7 @@ agent planning and code navigation:
 cgz files --path <path>
 cgz query --path <path> <symbol-or-file-term>
 cgz context --path <path> "<task or symbol>"
+cgz context --path <path> "<task or symbol>" --json
 cgz affected --path <path> <changed-file>...
 ```
 
@@ -45,6 +46,8 @@ git diff --name-only | xargs cgz affected --path <path>
 `cgz context` and `cgz query` work best with concrete symbol names, file names,
 package names, and short domain terms. Natural-language task descriptions are
 accepted, but agents should still inspect the returned files before editing.
+Use `cgz context --json` when a machine-readable list of matched terms, files,
+symbols, and match reasons is more useful than markdown context.
 
 ## Verification Boundary
 

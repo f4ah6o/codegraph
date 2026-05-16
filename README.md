@@ -75,6 +75,7 @@ cgz query <search>     # search indexed nodes
 cgz query <search> -j  # print search results as JSON
 cgz files              # print indexed file counts by language
 cgz context <task>     # print context for a task
+cgz context <task> -j  # print context evidence as JSON
 cgz affected <files>   # print affected test files from import dependents
 cgz serve --mcp        # start the MCP server
 cgz unlock [path]      # remove .codegraph/codegraph.lock

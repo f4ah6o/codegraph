@@ -154,6 +154,81 @@ pub fn parse(input : String) -> String {
 }
 
 #[test]
+fn context_json_returns_agent_friendly_evidence() {
+    let dir = TempDir::new().unwrap();
+    fs::write(
+        dir.path().join("moon.mod.json"),
+        r#"{"name":"example/calver"}"#,
+    )
+    .unwrap();
+    fs::write(dir.path().join("moon.pkg.json"), "{}").unwrap();
+    fs::write(
+        dir.path().join("parse.mbt"),
+        r#"
+pub fn parse_with_scheme(input : String) -> String {
+  input
+}
+
+pub fn parse(input : String) -> String {
+  parse_with_scheme(input)
+}
+"#,
+    )
+    .unwrap();
+
+    let project = dir.path().to_str().unwrap();
+    run(&["init", project, "--index"]);
+
+    let output = run(&[
+        "context",
+        "change parse_with_scheme validation for invalid scheme order",
+        "--path",
+        project,
+        "--json",
+    ]);
+    let value: Value = serde_json::from_str(&output).unwrap();
+
+    assert_eq!(
+        value["query"].as_str().unwrap(),
+        "change parse_with_scheme validation for invalid scheme order"
+    );
+    assert!(value["search_terms"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|term| term == "parse_with_scheme"));
+
+    let matches = value["matches"].as_array().unwrap();
+    assert!(matches.iter().any(|entry| {
+        entry["search_term"] == "parse_with_scheme"
+            && entry["reason"]
+                .as_str()
+                .unwrap()
+                .contains("extracted task term")
+            && entry["node"]["name"] == "parse_with_scheme"
+            && entry["code"]
+                .as_str()
+                .unwrap()
+                .contains("pub fn parse_with_scheme")
+    }));
+
+    assert!(value["files"].as_array().unwrap().iter().any(|entry| {
+        entry["path"] == "parse.mbt"
+            && entry["symbols"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|s| s == "parse_with_scheme")
+    }));
+    assert!(value["symbols"].as_array().unwrap().iter().any(|entry| {
+        entry["name"] == "parse_with_scheme"
+            && entry["kind"] == "function"
+            && entry["file_path"] == "parse.mbt"
+    }));
+    assert!(value["warnings"].as_array().unwrap().is_empty());
+}
+
+#[test]
 fn context_guides_when_no_symbols_match() {
     let dir = TempDir::new().unwrap();
     fs::write(

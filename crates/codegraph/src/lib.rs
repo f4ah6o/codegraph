@@ -11,10 +11,13 @@ use db::Database;
 use extraction::{detect_language, extract_from_source, should_include_file};
 use graph::{GraphTraverser, Subgraph};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use types::{FileRecord, GraphStats, IndexResult, Node, NodeEdge, SearchOptions, SearchResult};
+use types::{
+    ContextFileSummary, ContextMatch, ContextReport, ContextSymbolSummary, FileRecord, GraphStats,
+    IndexResult, Node, NodeEdge, SearchOptions, SearchResult,
+};
 
 pub const CODEGRAPH_DIR: &str = ".codegraph";
 pub const DATABASE_FILE: &str = "codegraph.db";
@@ -147,15 +150,17 @@ impl CodeGraph {
     }
 
     pub fn build_context(&self, task: &str, max_nodes: i64, include_code: bool) -> Result<String> {
-        let results = self.find_context_nodes(task, max_nodes)?;
+        let report = self.build_context_report(task, max_nodes, include_code)?;
         let mut out = format!("## Context: {task}\n\n");
-        if results.is_empty() {
-            out.push_str("No matching symbols or files were found.\n\n");
-            out.push_str("Try a concrete symbol name, file name, package/module name, or a shorter code term. ");
-            out.push_str("For candidate discovery, run `cgz query --json <term>`.\n");
+        if report.matches.is_empty() {
+            for warning in &report.warnings {
+                out.push_str(warning);
+                out.push('\n');
+            }
             return Ok(out);
         }
-        for result in results {
+
+        for result in report.matches {
             let n = result.node;
             out.push_str(&format!(
                 "- `{}` `{}` at `{}:{}`",
@@ -165,34 +170,101 @@ impl CodeGraph {
                 out.push_str(&format!(" — `{}`", sig.replace('\n', " ")));
             }
             out.push('\n');
-            if include_code {
-                if let Ok(code) = self.read_node_source(&n) {
-                    out.push_str("\n```");
-                    out.push_str(n.language.as_str());
+            if let Some(code) = result.code {
+                out.push_str("\n```");
+                out.push_str(n.language.as_str());
+                out.push('\n');
+                out.push_str(&code);
+                if !code.ends_with('\n') {
                     out.push('\n');
-                    out.push_str(&code);
-                    if !code.ends_with('\n') {
-                        out.push('\n');
-                    }
-                    out.push_str("```\n\n");
                 }
+                out.push_str("```\n\n");
             }
         }
         Ok(out)
     }
 
-    fn find_context_nodes(&self, task: &str, max_nodes: i64) -> Result<Vec<SearchResult>> {
+    pub fn build_context_report(
+        &self,
+        task: &str,
+        max_nodes: i64,
+        include_code: bool,
+    ) -> Result<ContextReport> {
+        let query = task.trim().to_string();
+        let search_terms = context_search_terms(task);
+        let results = self.find_context_nodes(&search_terms, max_nodes)?;
+        let mut matches = Vec::new();
+        let mut files: BTreeMap<String, ContextFileSummary> = BTreeMap::new();
+        let mut symbols = Vec::new();
+
+        for (result, search_term) in results {
+            let code = if include_code {
+                self.read_node_source(&result.node).ok()
+            } else {
+                None
+            };
+            let file = files
+                .entry(result.node.file_path.clone())
+                .or_insert_with(|| ContextFileSummary {
+                    path: result.node.file_path.clone(),
+                    language: result.node.language,
+                    match_count: 0,
+                    symbols: Vec::new(),
+                });
+            file.match_count += 1;
+            if !file.symbols.iter().any(|name| name == &result.node.name) {
+                file.symbols.push(result.node.name.clone());
+            }
+            symbols.push(ContextSymbolSummary {
+                name: result.node.name.clone(),
+                kind: result.node.kind,
+                file_path: result.node.file_path.clone(),
+                start_line: result.node.start_line,
+            });
+            matches.push(ContextMatch {
+                reason: context_match_reason(task, &search_term),
+                search_term,
+                score: result.score,
+                node: result.node,
+                code,
+            });
+        }
+
+        let mut warnings = Vec::new();
+        if matches.is_empty() {
+            warnings.push("No matching symbols or files were found.".to_string());
+            warnings.push(
+                "Try a concrete symbol name, file name, package/module name, or a shorter code term. For candidate discovery, run `cgz query --json <term>`."
+                    .to_string(),
+            );
+        }
+
+        Ok(ContextReport {
+            query,
+            search_terms,
+            matches,
+            files: files.into_values().collect(),
+            symbols,
+            warnings,
+        })
+    }
+
+    fn find_context_nodes(
+        &self,
+        search_terms: &[String],
+        max_nodes: i64,
+    ) -> Result<Vec<(SearchResult, String)>> {
         let limit = max_nodes.max(1);
         let mut out = Vec::new();
         let mut seen = BTreeSet::new();
 
-        for term in context_search_terms(task) {
+        for term in search_terms {
             if out.len() >= limit as usize {
                 break;
             }
             let remaining = limit - out.len() as i64;
             let results = self.search_nodes(
-                &term,
+                term,
                 SearchOptions {
                     limit: remaining,
                     ..Default::default()
@@ -200,7 +272,7 @@ impl CodeGraph {
             )?;
             for result in results {
                 if seen.insert(result.node.id.clone()) {
-                    out.push(result);
+                    out.push((result, term.clone()));
                     if out.len() >= limit as usize {
                         break;
                     }
@@ -270,6 +342,14 @@ fn context_search_terms(task: &str) -> Vec<String> {
     }
 
     terms
+}
+
+fn context_match_reason(task: &str, search_term: &str) -> String {
+    if task.trim().eq_ignore_ascii_case(search_term) {
+        "matched the full context query".to_string()
+    } else {
+        format!("matched extracted task term `{search_term}`")
+    }
 }
 
 fn push_context_term(term: &str, terms: &mut Vec<String>, seen: &mut BTreeSet<String>) {

@@ -303,6 +303,41 @@ pub struct SearchResult {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct ContextReport {
+    pub query: String,
+    pub search_terms: Vec<String>,
+    pub matches: Vec<ContextMatch>,
+    pub files: Vec<ContextFileSummary>,
+    pub symbols: Vec<ContextSymbolSummary>,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ContextMatch {
+    pub search_term: String,
+    pub reason: String,
+    pub score: f64,
+    pub node: Node,
+    pub code: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ContextFileSummary {
+    pub path: String,
+    pub language: Language,
+    pub match_count: i64,
+    pub symbols: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ContextSymbolSummary {
+    pub name: String,
+    pub kind: NodeKind,
+    pub file_path: String,
+    pub start_line: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct NodeEdge {
     pub node: Node,
     pub edge: Edge,
