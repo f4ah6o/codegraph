@@ -1,3 +1,4 @@
+use codegraph::types::SearchOptions;
 use codegraph::CodeGraph;
 use std::fs;
 use tempfile::TempDir;
@@ -75,6 +76,41 @@ fn agent_context_eval_reaches_expected_symbols_and_files() {
     }
 
     assert_eq!(passed, cases.len());
+}
+
+#[test]
+fn search_ranking_prefers_exact_symbol_matches() {
+    let dir = TempDir::new().unwrap();
+    write_eval_fixture(dir.path());
+    fs::write(
+        dir.path().join("src/parse_helpers.rs"),
+        "pub fn parse_with_scheme_helper() {}\n",
+    )
+    .unwrap();
+
+    let mut cg = CodeGraph::init(dir.path()).unwrap();
+    let index = cg.index_all().unwrap();
+    assert!(index.success, "{:?}", index.errors);
+
+    let results = cg
+        .search_nodes(
+            "parse_with_scheme",
+            SearchOptions {
+                limit: 5,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    assert!(
+        results.len() >= 2,
+        "expected exact and prefix matches, got {results:?}"
+    );
+    assert_eq!(results[0].node.name, "parse_with_scheme");
+    assert!(
+        results[0].score > results[1].score,
+        "expected exact match score above prefix/file matches: {results:?}"
+    );
 }
 
 fn write_eval_fixture(root: &std::path::Path) {

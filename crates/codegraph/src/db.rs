@@ -268,6 +268,7 @@ impl Database {
         } else {
             options.limit
         };
+        let fetch_limit = (limit * 5).max(limit).min(500);
         let pattern = format!("%{}%", query);
         let exact = query.to_string();
         let prefix = format!("{}%", query);
@@ -289,7 +290,7 @@ impl Database {
                         l.as_str(),
                         exact,
                         prefix,
-                        limit
+                        fetch_limit
                     ],
                     node_from_row,
                 )?)?;
@@ -307,7 +308,7 @@ impl Database {
                         k.as_str(),
                         exact,
                         prefix,
-                        limit
+                        fetch_limit
                     ],
                     node_from_row,
                 )?)?;
@@ -325,7 +326,7 @@ impl Database {
                         l.as_str(),
                         exact,
                         prefix,
-                        limit
+                        fetch_limit
                     ],
                     node_from_row,
                 )?)?;
@@ -335,16 +336,37 @@ impl Database {
                 let sql = format!("{base} WHERE (name LIKE ? OR qualified_name LIKE ? OR signature LIKE ? OR file_path LIKE ?){order}");
                 let mut stmt = self.conn.prepare(&sql)?;
                 let nodes = collect_nodes(stmt.query_map(
-                    params![pattern, pattern, pattern, pattern, exact, prefix, limit],
+                    params![
+                        pattern,
+                        pattern,
+                        pattern,
+                        pattern,
+                        exact,
+                        prefix,
+                        fetch_limit
+                    ],
                     node_from_row,
                 )?)?;
                 nodes
             }
         };
-        Ok(rows
+        let mut results = rows
             .into_iter()
-            .map(|node| SearchResult { node, score: 1.0 })
-            .collect())
+            .map(|node| SearchResult {
+                score: search_score(query, &node),
+                node,
+            })
+            .collect::<Vec<_>>();
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.node.name.len().cmp(&b.node.name.len()))
+                .then_with(|| a.node.file_path.cmp(&b.node.file_path))
+                .then_with(|| a.node.start_line.cmp(&b.node.start_line))
+        });
+        results.truncate(limit as usize);
+        Ok(results)
     }
 
     pub fn get_node(&self, id: &str) -> Result<Option<Node>> {
@@ -529,6 +551,32 @@ fn edge_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Edge> {
         col: row.get(5)?,
         provenance: row.get(6)?,
     })
+}
+
+fn search_score(query: &str, node: &Node) -> f64 {
+    let query = query.to_ascii_lowercase();
+    let name = node.name.to_ascii_lowercase();
+    let qualified = node.qualified_name.to_ascii_lowercase();
+    let file_path = node.file_path.to_ascii_lowercase();
+    let signature = node
+        .signature
+        .as_deref()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+
+    if name == query {
+        100.0
+    } else if name.starts_with(&query) {
+        90.0
+    } else if qualified.contains(&query) {
+        80.0
+    } else if file_path.contains(&query) {
+        70.0
+    } else if signature.contains(&query) {
+        60.0
+    } else {
+        10.0
+    }
 }
 
 fn parse_kind(s: &str) -> NodeKind {
