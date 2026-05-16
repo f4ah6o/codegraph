@@ -1,5 +1,10 @@
 # cgz
 
+[![Crates.io](https://img.shields.io/crates/v/cgz.svg)](https://crates.io/crates/cgz)
+[![Docs.rs](https://docs.rs/cgz/badge.svg)](https://docs.rs/cgz)
+[![License](https://img.shields.io/crates/l/cgz.svg)](https://github.com/f4ah6o/codegraph/blob/main/LICENSE)
+[![Publish crate](https://github.com/f4ah6o/codegraph/actions/workflows/publish-crate.yml/badge.svg)](https://github.com/f4ah6o/codegraph/actions/workflows/publish-crate.yml)
+
 `cgz` is the Rust CLI in this repository. It builds and queries a local
 CodeGraph database under `.codegraph/`.
 
