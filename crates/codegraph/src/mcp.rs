@@ -134,11 +134,17 @@ impl MCPServer {
                     .get("includeCode")
                     .and_then(Value::as_bool)
                     .unwrap_or(true);
-                Ok(text_result(cg.build_context(
-                    task,
-                    max_nodes,
-                    include_code,
-                )?))
+                if args.get("format").and_then(Value::as_str) == Some("json") {
+                    Ok(text_result(serde_json::to_string_pretty(
+                        &cg.build_context_report(task, max_nodes, include_code)?,
+                    )?))
+                } else {
+                    Ok(text_result(cg.build_context(
+                        task,
+                        max_nodes,
+                        include_code,
+                    )?))
+                }
             }
             "codegraph_callers" => {
                 let symbol = required_str(args, "symbol")?;
@@ -249,8 +255,12 @@ impl MCPServer {
             "codegraph_status" => {
                 let stats = cg.stats()?;
                 Ok(text_result(format!(
-                    "**Files indexed:** {}\n**Nodes:** {}\n**Edges:** {}",
-                    stats.file_count, stats.node_count, stats.edge_count
+                    "**Files indexed:** {}\n**Nodes:** {}\n**Edges:** {}\n**Last indexed at:** {}\n**Stale files:** {}",
+                    stats.file_count,
+                    stats.node_count,
+                    stats.edge_count,
+                    format_optional_timestamp_ms(stats.last_indexed_at),
+                    stats.stale_file_count
                 )))
             }
             "codegraph_files" => {
@@ -267,6 +277,12 @@ impl MCPServer {
                 } else {
                     lines
                 }))
+            }
+            "codegraph_affected" => {
+                let files = required_string_array(args, "files")?;
+                Ok(text_result(serde_json::to_string_pretty(
+                    &cg.build_affected_report(&files)?,
+                )?))
             }
             _ => Err(anyhow!("Unknown tool: {name}")),
         }
@@ -297,7 +313,7 @@ fn tools() -> Value {
         tool(
             "codegraph_context",
             "Build comprehensive context for a task.",
-            json!({"task": {"type":"string"}, "maxNodes": {"type":"number"}, "includeCode": {"type":"boolean"}, "projectPath": {"type":"string"}}),
+            json!({"task": {"type":"string"}, "maxNodes": {"type":"number"}, "includeCode": {"type":"boolean"}, "format": {"type":"string", "enum":["text", "json"]}, "projectPath": {"type":"string"}}),
             vec!["task"]
         ),
         tool(
@@ -341,6 +357,12 @@ fn tools() -> Value {
             "Get indexed project files.",
             json!({"path": {"type":"string"}, "pattern": {"type":"string"}, "format": {"type":"string"}, "includeMetadata": {"type":"boolean"}, "maxDepth": {"type":"number"}, "projectPath": {"type":"string"}}),
             vec![]
+        ),
+        tool(
+            "codegraph_affected",
+            "Return affected test candidates for changed files.",
+            json!({"files": {"type":"array", "items": {"type":"string"}}, "projectPath": {"type":"string"}}),
+            vec!["files"]
         ),
     ])
 }
@@ -401,6 +423,21 @@ fn required_str<'a>(args: &'a Value, key: &str) -> Result<&'a str> {
         .ok_or_else(|| anyhow!("{key} must be a non-empty string"))
 }
 
+fn required_string_array(args: &Value, key: &str) -> Result<Vec<String>> {
+    let values = args
+        .get(key)
+        .and_then(Value::as_array)
+        .ok_or_else(|| anyhow!("{key} must be an array of strings"))?;
+    let mut out = Vec::new();
+    for value in values {
+        let Some(item) = value.as_str().filter(|s| !s.is_empty()) else {
+            return Err(anyhow!("{key} must be an array of non-empty strings"));
+        };
+        out.push(item.to_string());
+    }
+    Ok(out)
+}
+
 fn clamp(value: i64, min: i64, max: i64) -> i64 {
     value.max(min).min(max)
 }
@@ -439,6 +476,12 @@ fn format_node_edges(title: &str, edges: &[NodeEdge], limit: usize) -> String {
 
 fn text_result(text: String) -> Value {
     json!({ "content": [{ "type": "text", "text": text }] })
+}
+
+fn format_optional_timestamp_ms(value: Option<i64>) -> String {
+    value
+        .map(|ms| ms.to_string())
+        .unwrap_or_else(|| "unknown".to_string())
 }
 
 fn error_response(id: Value, code: i64, message: &str) -> Value {

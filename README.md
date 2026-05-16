@@ -12,7 +12,7 @@ The original upstream README is kept as `README.org.md`.
 | Crate | `cgz` |
 | Binary | `cgz` |
 | Library name | `codegraph` |
-| Current crate version | `2026.5.2` |
+| Current crate version | `2026.5.3` |
 | License | MIT |
 | Repository | `https://github.com/f4ah6o/codegraph` |
 
@@ -75,7 +75,9 @@ cgz query <search>     # search indexed nodes
 cgz query <search> -j  # print search results as JSON
 cgz files              # print indexed file counts by language
 cgz context <task>     # print context for a task
+cgz context <task> -j  # print context evidence as JSON
 cgz affected <files>   # print affected test files from import dependents
+cgz affected <files> -j # print affected test evidence as JSON
 cgz serve --mcp        # start the MCP server
 cgz unlock [path]      # remove .codegraph/codegraph.lock
 ```
@@ -91,6 +93,8 @@ For day-to-day read-only exploration, use `cgz files`, `cgz query`,
 finish with the target repository's normal tests, type checks, or build checks.
 
 See [docs/AGENT_WORKFLOW.md](./docs/AGENT_WORKFLOW.md) for the short playbook.
+See [docs/AGENT_CONTEXT_EVAL.md](./docs/AGENT_CONTEXT_EVAL.md) for the
+automated context-success fixture used to guard agent navigation quality.
 
 Running `cgz` with no subcommand currently prints:
 

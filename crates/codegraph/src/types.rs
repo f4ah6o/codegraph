@@ -285,6 +285,10 @@ pub struct GraphStats {
     pub node_count: i64,
     pub edge_count: i64,
     pub db_size_bytes: i64,
+    pub oldest_indexed_at: Option<i64>,
+    pub last_indexed_at: Option<i64>,
+    pub newest_modified_at: Option<i64>,
+    pub stale_file_count: i64,
     pub files_by_language: Vec<(String, i64)>,
     pub nodes_by_kind: Vec<(String, i64)>,
 }
@@ -300,6 +304,69 @@ pub struct SearchOptions {
 pub struct SearchResult {
     pub node: Node,
     pub score: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ContextReport {
+    pub query: String,
+    pub search_terms: Vec<String>,
+    pub matches: Vec<ContextMatch>,
+    pub files: Vec<ContextFileSummary>,
+    pub symbols: Vec<ContextSymbolSummary>,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ContextMatch {
+    pub search_term: String,
+    pub reason: String,
+    pub score: f64,
+    pub node: Node,
+    pub code: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ContextFileSummary {
+    pub path: String,
+    pub language: Language,
+    pub match_count: i64,
+    pub symbols: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ContextSymbolSummary {
+    pub name: String,
+    pub kind: NodeKind,
+    pub file_path: String,
+    pub start_line: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AffectedReport {
+    pub changed_files: Vec<String>,
+    pub affected_tests: Vec<String>,
+    pub debug: Vec<AffectedDebugEntry>,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AffectedDebugEntry {
+    pub changed_file: String,
+    pub reason: String,
+    pub matched_tests: Vec<String>,
+    pub matched_by: AffectedMatchSources,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AffectedMatchSources {
+    pub direct_test_input: Vec<String>,
+    pub import_dependents: Vec<String>,
+    pub moonbit_same_package: Vec<String>,
+    pub rust_name_heuristic: Vec<String>,
+    pub rust_workspace_heuristic: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -2,7 +2,22 @@ use crate::config::CodeGraphConfig;
 use crate::types::*;
 use regex::Regex;
 use std::path::Path;
+use std::sync::LazyLock;
 use tree_sitter::{Node as SyntaxNode, Parser};
+
+static SOL_ROUTE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r#"@sol\.(route|api_get|api_post|api_put|api_patch|api_delete)\s*\(\s*"([^"]+)"\s*,\s*([A-Za-z_][A-Za-z0-9_]*)"#,
+    )
+    .unwrap()
+});
+
+static JS_ROUTE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r#"\b(?:app|router|route)\.(get|post|put|patch|delete|all|use)\s*\(\s*["']([^"']+)["']\s*,\s*([^\n;]+)"#,
+    )
+    .unwrap()
+});
 
 pub fn should_include_file(path: &Path, config: &CodeGraphConfig) -> bool {
     let s = path.to_string_lossy().replace('\\', "/");
@@ -116,6 +131,9 @@ pub fn extract_from_source(path: &Path, source: &str, language: Language) -> Ext
             &file_path, source, language, now, &mut nodes, &mut edges, &mut refs,
         ),
     }
+    extract_framework_routes(
+        &file_path, source, language, now, &mut nodes, &mut edges, &mut refs,
+    );
 
     ExtractionResult {
         nodes,
@@ -857,6 +875,402 @@ fn extract_generic(
         refs,
         r"([A-Za-z_$][A-Za-z0-9_$.]*)\s*\(",
     );
+}
+
+fn extract_framework_routes(
+    file_path: &str,
+    source: &str,
+    language: Language,
+    now: i64,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+    refs: &mut Vec<UnresolvedReference>,
+) {
+    match language {
+        Language::MoonBit => extract_sol_routes(file_path, source, now, nodes, edges, refs),
+        Language::JavaScript | Language::TypeScript | Language::Tsx | Language::Jsx => {
+            extract_js_routes(file_path, source, language, now, nodes, edges, refs);
+            extract_file_routes(file_path, source, language, now, nodes, edges);
+        }
+        Language::Svelte => extract_file_routes(file_path, source, language, now, nodes, edges),
+        _ => {}
+    }
+}
+
+fn extract_sol_routes(
+    file_path: &str,
+    source: &str,
+    now: i64,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+    refs: &mut Vec<UnresolvedReference>,
+) {
+    let safe = strip_line_comments(source);
+    for cap in SOL_ROUTE_RE.captures_iter(&safe) {
+        let kind = cap.get(1).unwrap().as_str();
+        let route_path = cap.get(2).unwrap().as_str();
+        let handler = cap.get(3).unwrap().as_str();
+        let method = match kind {
+            "api_get" => Some("GET"),
+            "api_post" => Some("POST"),
+            "api_put" => Some("PUT"),
+            "api_patch" => Some("PATCH"),
+            "api_delete" => Some("DELETE"),
+            _ => None,
+        };
+        add_route_node(
+            file_path,
+            Language::MoonBit,
+            method,
+            route_path,
+            Some(handler),
+            line_for(&safe, cap.get(0).unwrap().start()),
+            cap.get(0).unwrap().as_str(),
+            now,
+            nodes,
+            edges,
+            refs,
+        );
+    }
+}
+
+fn extract_js_routes(
+    file_path: &str,
+    source: &str,
+    language: Language,
+    now: i64,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+    refs: &mut Vec<UnresolvedReference>,
+) {
+    let safe = strip_js_comments(source);
+    for cap in JS_ROUTE_RE.captures_iter(&safe) {
+        let method = cap.get(1).unwrap().as_str().to_ascii_uppercase();
+        let route_path = cap.get(2).unwrap().as_str();
+        if method == "USE" && !route_path.starts_with('/') {
+            continue;
+        }
+        let handlers = cap.get(3).unwrap().as_str();
+        let handler = tail_handler_ident(handlers);
+        add_route_node(
+            file_path,
+            language,
+            Some(&method),
+            route_path,
+            handler.as_deref(),
+            line_for(&safe, cap.get(0).unwrap().start()),
+            cap.get(0).unwrap().as_str(),
+            now,
+            nodes,
+            edges,
+            refs,
+        );
+    }
+}
+
+fn extract_file_routes(
+    file_path: &str,
+    source: &str,
+    language: Language,
+    now: i64,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+) {
+    if let Some((method, route_path)) = file_route_info(file_path) {
+        let line = source
+            .find("export default")
+            .or_else(|| source.find("export "))
+            .map(|idx| line_for(source, idx))
+            .unwrap_or(1);
+        add_route_node(
+            file_path,
+            language,
+            method,
+            &route_path,
+            None,
+            line,
+            file_path,
+            now,
+            nodes,
+            edges,
+            &mut Vec::new(),
+        );
+    }
+}
+
+fn add_route_node(
+    file_path: &str,
+    language: Language,
+    method: Option<&str>,
+    route_path: &str,
+    handler: Option<&str>,
+    line: i64,
+    signature: &str,
+    now: i64,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+    refs: &mut Vec<UnresolvedReference>,
+) {
+    let name = method
+        .map(|m| format!("{m} {route_path}"))
+        .unwrap_or_else(|| route_path.to_string());
+    if nodes.iter().any(|n| {
+        n.kind == NodeKind::Route
+            && n.file_path == file_path
+            && n.name == name
+            && n.start_line == line
+    }) {
+        return;
+    }
+    let mut node = make_node(
+        file_path,
+        language,
+        NodeKind::Route,
+        &name,
+        line,
+        0,
+        now,
+        Some(signature.trim().to_string()),
+    );
+    node.qualified_name = format!("{file_path}::route:{name}");
+    add_contains(nodes, edges, &node);
+    let id = node.id.clone();
+    nodes.push(node);
+    if let Some(handler) = handler.filter(|h| !h.is_empty()) {
+        refs.push(unresolved(
+            &id,
+            handler,
+            EdgeKind::References,
+            file_path,
+            language,
+            line,
+        ));
+    }
+}
+
+fn tail_handler_ident(handlers: &str) -> Option<String> {
+    let last = handlers
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .last()?;
+    if last.contains("=>") || last.starts_with("function") || last.starts_with("async ") {
+        return None;
+    }
+    last.trim_end_matches(')')
+        .split('.')
+        .next_back()
+        .and_then(|s| {
+            s.trim()
+                .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+                .next()
+        })
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+fn file_route_info(file_path: &str) -> Option<(Option<&'static str>, String)> {
+    let normalized = file_path.replace('\\', "/");
+    if normalized.starts_with("src/routes/") {
+        return sveltekit_route(&format!("/{normalized}"));
+    }
+    if normalized.starts_with("routes/") {
+        return sveltekit_route(&format!("/{normalized}"));
+    }
+    if normalized.starts_with("pages/") || normalized.starts_with("src/pages/") {
+        return next_pages_route(&normalized);
+    }
+    if normalized.starts_with("app/") || normalized.starts_with("src/app/") {
+        return next_app_route(&normalized);
+    }
+    None
+}
+
+fn sveltekit_route(path: &str) -> Option<(Option<&'static str>, String)> {
+    let idx = path.find("/routes/")? + "/routes/".len();
+    let rel = &path[idx..];
+    if !rel.rsplit('/').next()?.starts_with('+') {
+        return None;
+    }
+    let dir = rel.rsplit_once('/').map(|(dir, _)| dir).unwrap_or("");
+    Some((None, route_from_segments(dir)))
+}
+
+fn next_pages_route(path: &str) -> Option<(Option<&'static str>, String)> {
+    if path.starts_with("src/pages/") {
+        let rel = &path["src/".len()..];
+        return next_pages_route(rel);
+    }
+    let idx = path.find("pages/")? + "pages/".len();
+    let mut rel = strip_known_extension(&path[idx..])?.to_string();
+    let basename = rel.rsplit('/').next().unwrap_or("");
+    if basename.starts_with('_') {
+        return None;
+    }
+    if rel == "_app" || rel == "_document" || rel == "_error" || rel.ends_with("/_middleware") {
+        return None;
+    }
+    if rel.starts_with("api/") {
+        rel = rel.trim_start_matches("api/").to_string();
+        let child = route_from_segments(&rel);
+        let route = if child == "/" {
+            "/api".to_string()
+        } else {
+            format!("/api{child}")
+        };
+        return Some((Some("API"), route));
+    }
+    Some((None, route_from_segments(&rel)))
+}
+
+fn next_app_route(path: &str) -> Option<(Option<&'static str>, String)> {
+    if path.starts_with("src/app/") {
+        let rel = &path["src/".len()..];
+        return next_app_route(rel);
+    }
+    let idx = path.find("app/")? + "app/".len();
+    let rel = &path[idx..];
+    let file = rel.rsplit('/').next()?;
+    if !matches!(
+        file,
+        "page.tsx" | "page.jsx" | "page.ts" | "page.js" | "route.ts" | "route.js"
+    ) {
+        return None;
+    }
+    let dir = rel.rsplit_once('/').map(|(dir, _)| dir).unwrap_or("");
+    let method = if file.starts_with("route.") {
+        Some("API")
+    } else {
+        None
+    };
+    Some((method, route_from_segments(dir)))
+}
+
+fn strip_known_extension(path: &str) -> Option<&str> {
+    [".tsx", ".ts", ".jsx", ".js", ".svelte"]
+        .iter()
+        .find_map(|ext| path.strip_suffix(ext))
+}
+
+fn route_from_segments(path: &str) -> String {
+    let mut segments = Vec::new();
+    for segment in path.split('/').filter(|s| !s.is_empty()) {
+        if segment == "index" || segment.starts_with('(') && segment.ends_with(')') {
+            continue;
+        }
+        if segment.starts_with('[') && segment.ends_with(']') {
+            let param = segment
+                .trim_start_matches('[')
+                .trim_end_matches(']')
+                .trim_start_matches("...");
+            segments.push(format!(":{param}"));
+        } else {
+            segments.push(segment.to_string());
+        }
+    }
+    if segments.is_empty() {
+        "/".to_string()
+    } else {
+        format!("/{}", segments.join("/"))
+    }
+}
+
+fn strip_line_comments(source: &str) -> String {
+    let mut out = String::with_capacity(source.len());
+    let mut chars = source.chars().peekable();
+    let mut in_string: Option<char> = None;
+    let mut escaped = false;
+    while let Some(ch) = chars.next() {
+        if let Some(quote) = in_string {
+            out.push(ch);
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == quote {
+                in_string = None;
+            }
+            continue;
+        }
+        if ch == '"' || ch == '\'' || ch == '`' {
+            in_string = Some(ch);
+            out.push(ch);
+            continue;
+        }
+        if ch == '/' && chars.peek() == Some(&'/') {
+            chars.next();
+            out.push(' ');
+            out.push(' ');
+            while let Some(next) = chars.next() {
+                if next == '\n' {
+                    out.push('\n');
+                    break;
+                }
+                out.push(' ');
+            }
+            continue;
+        }
+        out.push(ch);
+    }
+    out
+}
+
+fn strip_js_comments(source: &str) -> String {
+    let mut out = String::with_capacity(source.len());
+    let mut chars = source.chars().peekable();
+    let mut in_string: Option<char> = None;
+    let mut escaped = false;
+    while let Some(ch) = chars.next() {
+        if let Some(quote) = in_string {
+            out.push(ch);
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == quote {
+                in_string = None;
+            }
+            continue;
+        }
+        if ch == '"' || ch == '\'' || ch == '`' {
+            in_string = Some(ch);
+            out.push(ch);
+            continue;
+        }
+        if ch == '/' && chars.peek() == Some(&'/') {
+            chars.next();
+            out.push(' ');
+            out.push(' ');
+            while let Some(next) = chars.next() {
+                if next == '\n' {
+                    out.push('\n');
+                    break;
+                }
+                out.push(' ');
+            }
+            continue;
+        }
+        if ch == '/' && chars.peek() == Some(&'*') {
+            chars.next();
+            out.push(' ');
+            out.push(' ');
+            let mut prev = '\0';
+            for next in chars.by_ref() {
+                if next == '\n' {
+                    out.push('\n');
+                } else {
+                    out.push(' ');
+                }
+                if prev == '*' && next == '/' {
+                    break;
+                }
+                prev = next;
+            }
+            continue;
+        }
+        out.push(ch);
+    }
+    out
 }
 
 fn add_regex_nodes(

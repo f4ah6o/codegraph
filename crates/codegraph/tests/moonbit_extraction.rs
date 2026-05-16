@@ -154,6 +154,135 @@ pub fn parse(input : String) -> String {
 }
 
 #[test]
+fn context_extracts_short_camel_case_type_from_natural_language() {
+    let dir = TempDir::new().unwrap();
+    fs::write(
+        dir.path().join("moon.mod.json"),
+        r#"{"name":"example/json"}"#,
+    )
+    .unwrap();
+    fs::write(dir.path().join("moon.pkg.json"), "{}").unwrap();
+    fs::write(
+        dir.path().join("json.mbt"),
+        r#"
+pub enum Json {
+  String(String)
+  Number(Double)
+}
+
+pub fn stringify(value : Json) -> String {
+  ""
+}
+"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("show.mbt"),
+        r#"
+pub trait Show {
+  output(Self, Logger) -> Unit
+}
+"#,
+    )
+    .unwrap();
+
+    let project = dir.path().to_str().unwrap();
+    run(&["init", project, "--index"]);
+
+    let output = run(&[
+        "context",
+        "How is Json implemented?",
+        "--path",
+        project,
+        "--json",
+    ]);
+    let value: Value = serde_json::from_str(&output).unwrap();
+    let search_terms = value["search_terms"].as_array().unwrap();
+    assert!(!search_terms.iter().any(|term| term == "How"), "{output}");
+    assert!(search_terms.iter().any(|term| term == "Json"), "{output}");
+    assert_eq!(value["matches"][0]["node"]["name"], "Json", "{output}");
+    assert_eq!(
+        value["matches"][0]["node"]["file_path"], "json.mbt",
+        "{output}"
+    );
+}
+
+#[test]
+fn context_json_returns_agent_friendly_evidence() {
+    let dir = TempDir::new().unwrap();
+    fs::write(
+        dir.path().join("moon.mod.json"),
+        r#"{"name":"example/calver"}"#,
+    )
+    .unwrap();
+    fs::write(dir.path().join("moon.pkg.json"), "{}").unwrap();
+    fs::write(
+        dir.path().join("parse.mbt"),
+        r#"
+pub fn parse_with_scheme(input : String) -> String {
+  input
+}
+
+pub fn parse(input : String) -> String {
+  parse_with_scheme(input)
+}
+"#,
+    )
+    .unwrap();
+
+    let project = dir.path().to_str().unwrap();
+    run(&["init", project, "--index"]);
+
+    let output = run(&[
+        "context",
+        "change parse_with_scheme validation for invalid scheme order",
+        "--path",
+        project,
+        "--json",
+    ]);
+    let value: Value = serde_json::from_str(&output).unwrap();
+
+    assert_eq!(
+        value["query"].as_str().unwrap(),
+        "change parse_with_scheme validation for invalid scheme order"
+    );
+    assert!(value["search_terms"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|term| term == "parse_with_scheme"));
+
+    let matches = value["matches"].as_array().unwrap();
+    assert!(matches.iter().any(|entry| {
+        entry["search_term"] == "parse_with_scheme"
+            && entry["reason"]
+                .as_str()
+                .unwrap()
+                .contains("extracted task term")
+            && entry["node"]["name"] == "parse_with_scheme"
+            && entry["code"]
+                .as_str()
+                .unwrap()
+                .contains("pub fn parse_with_scheme")
+    }));
+
+    assert!(value["files"].as_array().unwrap().iter().any(|entry| {
+        entry["path"] == "parse.mbt"
+            && entry["symbols"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|s| s == "parse_with_scheme")
+    }));
+    assert!(value["symbols"].as_array().unwrap().iter().any(|entry| {
+        entry["name"] == "parse_with_scheme"
+            && entry["kind"] == "function"
+            && entry["file_path"] == "parse.mbt"
+    }));
+    assert!(value["warnings"].as_array().unwrap().is_empty());
+}
+
+#[test]
 fn context_guides_when_no_symbols_match() {
     let dir = TempDir::new().unwrap();
     fs::write(
@@ -250,6 +379,23 @@ fn affected_includes_moonbit_same_package_tests() {
         }),
         "{output}"
     );
+    assert!(
+        value["debug"].as_array().unwrap().iter().any(|entry| {
+            entry["changedFile"] == "parse.mbt"
+                && entry["matchedBy"]["moonbitSamePackage"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|test| test == "parse_test.mbt")
+                && entry["matchedBy"]["moonbitSamePackage"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|test| test == "README.mbt.md")
+        }),
+        "{output}"
+    );
+    assert!(value["warnings"].as_array().unwrap().is_empty(), "{output}");
 }
 
 #[test]
@@ -274,4 +420,9 @@ fn affected_keeps_direct_moonbit_test_input() {
     let value: Value = serde_json::from_str(&output).unwrap();
     let tests = value["affectedTests"].as_array().unwrap();
     assert_eq!(tests, &[Value::String("parse_test.mbt".into())]);
+    let debug = &value["debug"].as_array().unwrap()[0];
+    assert_eq!(
+        debug["matchedBy"]["directTestInput"],
+        Value::Array(vec![Value::String("parse_test.mbt".into())])
+    );
 }
