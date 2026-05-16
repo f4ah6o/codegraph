@@ -95,3 +95,33 @@ target/debug/cgz context Json --path /tmp/moonbitlang-core
 
 MoonBit fixture に `pub enum Json` を含む再現テストを追加し、`cgz context "How is Json implemented?"`
 が `json.mbt` と `enum Json` を返すことを確認した。
+
+## Reopened: 2026-05-16
+
+`d80a59c` の修正後に `moonbitlang/core` の実 index で再確認したところ、空結果ではなくなったが
+`Json` ではなく文頭の `How` が検索語として使われ、`Show` / `output` の context が先に返る。
+
+再現手順:
+
+```bash
+git clone --depth 1 https://github.com/moonbitlang/core.git /tmp/moonbitlang-core
+cargo build -p cgz
+target/debug/cgz init /tmp/moonbitlang-core
+target/debug/cgz index /tmp/moonbitlang-core
+target/debug/cgz context "How is Json implemented?" --path /tmp/moonbitlang-core
+```
+
+実際の結果は `builtin/traits.mbt` の `trait Show` と多数の `output` method が先頭に並び、
+`Json` の実装 context が返らない。単体で確認すると `cgz query How --path /tmp/moonbitlang-core`
+が `Show` に fuzzy match している。
+
+原因候補:
+
+`is_useful_context_term` が `term.chars().any(|c| c.is_ascii_uppercase())` だけで短い token を
+採用するため、文頭で大文字になった普通の英単語 `How` も短い CamelCase 型名と同じ扱いになる。
+
+期待する状態:
+
+自然文 query では文頭 capitalization の英単語を重要語にしない。`Json` のような短い型名を拾う場合も、
+少なくとも stop word / question word の除外、または `Uppercase + lowercase...` だけではなく既存 symbol
+への exact match を優先するなど、普通の英文 token が fuzzy match で関連 context を押し出さないようにする。
