@@ -338,6 +338,32 @@ pub struct ContextSymbolSummary {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AffectedReport {
+    pub changed_files: Vec<String>,
+    pub affected_tests: Vec<String>,
+    pub debug: Vec<AffectedDebugEntry>,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AffectedDebugEntry {
+    pub changed_file: String,
+    pub reason: String,
+    pub matched_tests: Vec<String>,
+    pub matched_by: AffectedMatchSources,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AffectedMatchSources {
+    pub direct_test_input: Vec<String>,
+    pub import_dependents: Vec<String>,
+    pub moonbit_same_package: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct NodeEdge {
     pub node: Node,
     pub edge: Edge,

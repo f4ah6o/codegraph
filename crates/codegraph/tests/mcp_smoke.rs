@@ -9,6 +9,11 @@ fn mcp_lists_and_calls_status() {
     let dir = TempDir::new().unwrap();
     fs::create_dir_all(dir.path().join("src")).unwrap();
     fs::write(dir.path().join("src/lib.rs"), "pub fn process_data() {}\n").unwrap();
+    fs::write(
+        dir.path().join("src/lib.test.rs"),
+        "pub fn test_process_data() {}\n",
+    )
+    .unwrap();
 
     let bin = env!("CARGO_BIN_EXE_cgz");
     assert!(Command::new(bin)
@@ -93,6 +98,22 @@ fn mcp_lists_and_calls_status() {
             })
         )
         .unwrap();
+        writeln!(
+            stdin,
+            "{}",
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 6,
+                "method": "tools/call",
+                "params": {
+                    "name": "codegraph_affected",
+                    "arguments": {
+                        "files": ["src/lib.test.rs"]
+                    }
+                }
+            })
+        )
+        .unwrap();
     }
 
     drop(child.stdin.take());
@@ -106,6 +127,9 @@ fn mcp_lists_and_calls_status() {
     assert_eq!(responses[0]["result"]["serverInfo"]["name"], "codegraph");
     let tools = responses[1]["result"]["tools"].as_array().unwrap();
     assert!(tools.iter().any(|tool| tool["name"] == "codegraph_search"));
+    assert!(tools
+        .iter()
+        .any(|tool| tool["name"] == "codegraph_affected"));
     assert!(responses[2]["result"]["content"][0]["text"]
         .as_str()
         .unwrap()
@@ -124,4 +148,17 @@ fn mcp_lists_and_calls_status() {
         .unwrap()
         .iter()
         .any(|symbol| symbol["name"] == "process_data"));
+    let affected_text = responses[5]["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap();
+    let affected: Value = serde_json::from_str(affected_text).unwrap();
+    assert!(affected["affectedTests"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|test| test == "src/lib.test.rs"));
+    assert_eq!(
+        affected["debug"][0]["matchedBy"]["directTestInput"],
+        Value::Array(vec![Value::String("src/lib.test.rs".into())])
+    );
 }

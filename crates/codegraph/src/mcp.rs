@@ -274,6 +274,12 @@ impl MCPServer {
                     lines
                 }))
             }
+            "codegraph_affected" => {
+                let files = required_string_array(args, "files")?;
+                Ok(text_result(serde_json::to_string_pretty(
+                    &cg.build_affected_report(&files)?,
+                )?))
+            }
             _ => Err(anyhow!("Unknown tool: {name}")),
         }
     }
@@ -348,6 +354,12 @@ fn tools() -> Value {
             json!({"path": {"type":"string"}, "pattern": {"type":"string"}, "format": {"type":"string"}, "includeMetadata": {"type":"boolean"}, "maxDepth": {"type":"number"}, "projectPath": {"type":"string"}}),
             vec![]
         ),
+        tool(
+            "codegraph_affected",
+            "Return affected test candidates for changed files.",
+            json!({"files": {"type":"array", "items": {"type":"string"}}, "projectPath": {"type":"string"}}),
+            vec!["files"]
+        ),
     ])
 }
 
@@ -405,6 +417,21 @@ fn required_str<'a>(args: &'a Value, key: &str) -> Result<&'a str> {
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
         .ok_or_else(|| anyhow!("{key} must be a non-empty string"))
+}
+
+fn required_string_array(args: &Value, key: &str) -> Result<Vec<String>> {
+    let values = args
+        .get(key)
+        .and_then(Value::as_array)
+        .ok_or_else(|| anyhow!("{key} must be an array of strings"))?;
+    let mut out = Vec::new();
+    for value in values {
+        let Some(item) = value.as_str().filter(|s| !s.is_empty()) else {
+            return Err(anyhow!("{key} must be an array of non-empty strings"));
+        };
+        out.push(item.to_string());
+    }
+    Ok(out)
 }
 
 fn clamp(value: i64, min: i64, max: i64) -> i64 {

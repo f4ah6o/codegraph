@@ -54,6 +54,8 @@ structured report.
 Use `cgz affected --json` when planning verification; its `debug[].matchedBy`
 field separates direct test inputs, import-dependent tests, and MoonBit
 same-package tests.
+For MCP clients, call `codegraph_affected` with a `files` array to get the same
+affected-test report.
 
 ## Verification Boundary
 

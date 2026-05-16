@@ -15,8 +15,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use types::{
-    ContextFileSummary, ContextMatch, ContextReport, ContextSymbolSummary, FileRecord, GraphStats,
-    IndexResult, Node, NodeEdge, SearchOptions, SearchResult,
+    AffectedDebugEntry, AffectedMatchSources, AffectedReport, ContextFileSummary, ContextMatch,
+    ContextReport, ContextSymbolSummary, FileRecord, GraphStats, IndexResult, Language, Node,
+    NodeEdge, SearchOptions, SearchResult,
 };
 
 pub const CODEGRAPH_DIR: &str = ".codegraph";
@@ -147,6 +148,75 @@ impl CodeGraph {
 
     pub fn get_all_files(&self) -> Result<Vec<FileRecord>> {
         self.db.get_all_files()
+    }
+
+    pub fn build_affected_report(&self, files: &[String]) -> Result<AffectedReport> {
+        let indexed_files = self.get_all_files()?;
+        let mut affected = BTreeSet::new();
+        let mut debug = Vec::new();
+        let mut warnings = Vec::new();
+
+        for file in files {
+            if is_test_file(file) {
+                affected.insert(file.clone());
+                debug.push(AffectedDebugEntry {
+                    changed_file: file.clone(),
+                    reason: "changed file is a test file".to_string(),
+                    matched_tests: vec![file.clone()],
+                    matched_by: AffectedMatchSources {
+                        direct_test_input: vec![file.clone()],
+                        import_dependents: Vec::new(),
+                        moonbit_same_package: Vec::new(),
+                    },
+                });
+                continue;
+            }
+
+            let mut matched = BTreeSet::new();
+            let mut import_dependents = BTreeSet::new();
+            for dep in self.get_file_dependents(file)? {
+                if is_test_file(&dep) {
+                    import_dependents.insert(dep.clone());
+                    matched.insert(dep.clone());
+                    affected.insert(dep);
+                }
+            }
+
+            let moonbit_tests: BTreeSet<String> = moonbit_same_package_tests(file, &indexed_files)
+                .into_iter()
+                .collect();
+            for test in &moonbit_tests {
+                matched.insert(test.clone());
+                affected.insert(test.clone());
+            }
+
+            if matched.is_empty() {
+                warnings.push(format!(
+                    "{file}: no import-dependent tests or MoonBit same-package tests found"
+                ));
+            }
+            debug.push(AffectedDebugEntry {
+                changed_file: file.clone(),
+                reason: if matched.is_empty() {
+                    "no import-dependent tests or MoonBit same-package tests found".to_string()
+                } else {
+                    "matched import-dependent tests and/or MoonBit same-package tests".to_string()
+                },
+                matched_tests: matched.into_iter().collect(),
+                matched_by: AffectedMatchSources {
+                    direct_test_input: Vec::new(),
+                    import_dependents: import_dependents.into_iter().collect(),
+                    moonbit_same_package: moonbit_tests.into_iter().collect(),
+                },
+            });
+        }
+
+        Ok(AffectedReport {
+            changed_files: files.to_vec(),
+            affected_tests: affected.into_iter().collect(),
+            debug,
+            warnings,
+        })
     }
 
     pub fn build_context(&self, task: &str, max_nodes: i64, include_code: bool) -> Result<String> {
@@ -450,4 +520,62 @@ fn system_time_ms(t: std::time::SystemTime) -> Option<i64> {
     t.duration_since(std::time::UNIX_EPOCH)
         .ok()
         .map(|d| d.as_millis() as i64)
+}
+
+fn is_test_file(file: &str) -> bool {
+    let basename = file.rsplit('/').next().unwrap_or(file);
+    file.ends_with(".mbt.md")
+        || basename.ends_with("_test.mbt")
+        || basename.ends_with("_wbtest.mbt")
+        || file.contains("/__tests__/")
+        || file.contains("/test/")
+        || file.contains("/tests/")
+        || file.contains("/e2e/")
+        || file.contains("/spec/")
+        || file.contains(".test.")
+        || file.contains(".spec.")
+}
+
+fn moonbit_same_package_tests(file: &str, indexed_files: &[FileRecord]) -> Vec<String> {
+    if is_test_file(file) || !is_moonbit_source_file(file) {
+        return Vec::new();
+    }
+    let Some(package_dir) = moonbit_package_dir(file, indexed_files) else {
+        return Vec::new();
+    };
+    indexed_files
+        .iter()
+        .filter(|record| record.language == Language::MoonBit)
+        .filter(|record| is_test_file(&record.path))
+        .filter(|record| {
+            moonbit_package_dir(&record.path, indexed_files).as_deref() == Some(&package_dir)
+        })
+        .map(|record| record.path.clone())
+        .collect()
+}
+
+fn is_moonbit_source_file(file: &str) -> bool {
+    file.ends_with(".mbt") || file.ends_with(".mbti") || file.ends_with(".mbt.md")
+}
+
+fn moonbit_package_dir(file: &str, indexed_files: &[FileRecord]) -> Option<String> {
+    let mut best: Option<&str> = None;
+    for record in indexed_files {
+        if !record.path.ends_with("moon.pkg.json") && !record.path.ends_with("moon.pkg") {
+            continue;
+        }
+        let dir = record
+            .path
+            .rsplit_once('/')
+            .map(|(dir, _)| dir)
+            .unwrap_or("");
+        if (dir.is_empty() || file == dir || file.starts_with(&format!("{dir}/")))
+            && best
+                .map(|current| dir.len() > current.len())
+                .unwrap_or(true)
+        {
+            best = Some(dir);
+        }
+    }
+    best.map(str::to_string)
 }
