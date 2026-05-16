@@ -93,6 +93,8 @@ For day-to-day read-only exploration, use `cgz files`, `cgz query`,
 finish with the target repository's normal tests, type checks, or build checks.
 
 See [docs/AGENT_WORKFLOW.md](./docs/AGENT_WORKFLOW.md) for the short playbook.
+See [docs/AGENT_CONTEXT_EVAL.md](./docs/AGENT_CONTEXT_EVAL.md) for the
+automated context-success fixture used to guard agent navigation quality.
 
 Running `cgz` with no subcommand currently prints:
 
