@@ -12,7 +12,7 @@ The original upstream README is kept as `README.org.md`.
 | Crate | `cgz` |
 | Binary | `cgz` |
 | Library name | `codegraph` |
-| Current crate version | `2026.5.0` |
+| Current crate version | `2026.5.2` |
 | License | MIT |
 | Repository | `https://github.com/f4ah6o/codegraph` |
 
