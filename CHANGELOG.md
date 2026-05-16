@@ -7,12 +7,6 @@ a [GitHub Release](https://github.com/f4ah6o/codegraph/releases) tagged
 This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2026.5.3] - 2026-05-16
-
-### Changed
-- Reissue the `cgz` release from the merged `origin/main` branch so the
-  published crate and release tag are based on the repository's release branch.
-
 ## [2026.5.2] - 2026-05-16
 
 ### Added
@@ -53,7 +47,6 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   chmod +x "$(npm root -g)/@colbymchenry/codegraph/dist/bin/codegraph.js"
   ```
 
-[2026.5.3]: https://github.com/f4ah6o/codegraph/releases/tag/v2026.5.3
 [2026.5.2]: https://github.com/f4ah6o/codegraph/releases/tag/v2026.5.2
 [2026.5.1]: https://github.com/f4ah6o/codegraph/releases/tag/v2026.5.1
 [0.7.6]: https://github.com/f4ah6o/codegraph/releases/tag/v0.7.6

@@ -1,7 +1,9 @@
 use anyhow::{anyhow, Result};
 use clap::{Parser, Subcommand};
-use codegraph::types::SearchOptions;
+use codegraph::types::{FileRecord, Language, SearchOptions};
 use codegraph::{find_nearest_codegraph_root, is_initialized, CodeGraph};
+use serde_json::json;
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -60,8 +62,6 @@ enum Command {
         task: String,
         #[arg(short, long)]
         path: Option<PathBuf>,
-        #[arg(short, long)]
-        json: bool,
     },
     Affected {
         files: Vec<String>,
@@ -150,19 +150,6 @@ fn main() -> Result<()> {
                 println!("Nodes: {}", stats.node_count);
                 println!("Edges: {}", stats.edge_count);
                 println!("DB Size: {} bytes", stats.db_size_bytes);
-                println!(
-                    "Last Indexed At: {}",
-                    format_optional_timestamp_ms(stats.last_indexed_at)
-                );
-                println!(
-                    "Oldest Indexed At: {}",
-                    format_optional_timestamp_ms(stats.oldest_indexed_at)
-                );
-                println!(
-                    "Newest Modified At: {}",
-                    format_optional_timestamp_ms(stats.newest_modified_at)
-                );
-                println!("Stale Files: {}", stats.stale_file_count);
                 println!("Files by Language:");
                 for (lang, count) in stats.files_by_language {
                     println!("  {lang:<15} {count}");
@@ -212,26 +199,61 @@ fn main() -> Result<()> {
                 }
             }
         }
-        Command::Context { task, path, json } => {
+        Command::Context { task, path } => {
             let root = resolve_root(path)?;
             let cg = CodeGraph::open(root)?;
-            if json {
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&cg.build_context_report(&task, 20, true)?)?
-                );
-            } else {
-                println!("{}", cg.build_context(&task, 20, true)?);
-            }
+            println!("{}", cg.build_context(&task, 20, true)?);
         }
         Command::Affected { files, path, json } => {
             let root = resolve_root(path)?;
             let cg = CodeGraph::open(root)?;
-            let report = cg.build_affected_report(&files)?;
+            let indexed_files = cg.get_all_files()?;
+            let mut affected = BTreeSet::new();
+            let mut debug = Vec::new();
+            for file in &files {
+                if is_test_file(file) {
+                    affected.insert(file.clone());
+                    debug.push(json!({
+                        "changedFile": file,
+                        "reason": "changed file is a test file",
+                        "matchedTests": [file],
+                    }));
+                    continue;
+                }
+                let mut matched = BTreeSet::new();
+                for dep in cg.get_file_dependents(file)? {
+                    if is_test_file(&dep) {
+                        matched.insert(dep.clone());
+                        affected.insert(dep);
+                    }
+                }
+                let moonbit_tests = moonbit_same_package_tests(file, &indexed_files);
+                for test in moonbit_tests {
+                    matched.insert(test.clone());
+                    affected.insert(test);
+                }
+                debug.push(json!({
+                    "changedFile": file,
+                    "reason": if matched.is_empty() {
+                        "no import-dependent tests or MoonBit same-package tests found"
+                    } else {
+                        "matched import-dependent tests and/or MoonBit same-package tests"
+                    },
+                    "matchedTests": matched.into_iter().collect::<Vec<_>>(),
+                }));
+            }
+            let affected: Vec<String> = affected.into_iter().collect();
             if json {
-                println!("{}", serde_json::to_string_pretty(&report)?);
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "changedFiles": files,
+                        "affectedTests": affected,
+                        "debug": debug,
+                    }))?
+                );
             } else {
-                for f in report.affected_tests {
+                for f in affected {
                     println!("{f}");
                 }
             }
@@ -279,8 +301,60 @@ fn print_index_result(result: &codegraph::types::IndexResult) {
     }
 }
 
-fn format_optional_timestamp_ms(value: Option<i64>) -> String {
-    value
-        .map(|ms| ms.to_string())
-        .unwrap_or_else(|| "unknown".to_string())
+fn is_test_file(file: &str) -> bool {
+    let basename = file.rsplit('/').next().unwrap_or(file);
+    file.ends_with(".mbt.md")
+        || basename.ends_with("_test.mbt")
+        || basename.ends_with("_wbtest.mbt")
+        || file.contains("/__tests__/")
+        || file.contains("/test/")
+        || file.contains("/tests/")
+        || file.contains("/e2e/")
+        || file.contains("/spec/")
+        || file.contains(".test.")
+        || file.contains(".spec.")
+}
+
+fn moonbit_same_package_tests(file: &str, indexed_files: &[FileRecord]) -> Vec<String> {
+    if is_test_file(file) || !is_moonbit_source_file(file) {
+        return Vec::new();
+    }
+    let Some(package_dir) = moonbit_package_dir(file, indexed_files) else {
+        return Vec::new();
+    };
+    indexed_files
+        .iter()
+        .filter(|record| record.language == Language::MoonBit)
+        .filter(|record| is_test_file(&record.path))
+        .filter(|record| {
+            moonbit_package_dir(&record.path, indexed_files).as_deref() == Some(&package_dir)
+        })
+        .map(|record| record.path.clone())
+        .collect()
+}
+
+fn is_moonbit_source_file(file: &str) -> bool {
+    file.ends_with(".mbt") || file.ends_with(".mbti") || file.ends_with(".mbt.md")
+}
+
+fn moonbit_package_dir(file: &str, indexed_files: &[FileRecord]) -> Option<String> {
+    let mut best: Option<&str> = None;
+    for record in indexed_files {
+        if !record.path.ends_with("moon.pkg.json") && !record.path.ends_with("moon.pkg") {
+            continue;
+        }
+        let dir = record
+            .path
+            .rsplit_once('/')
+            .map(|(dir, _)| dir)
+            .unwrap_or("");
+        if (dir.is_empty() || file == dir || file.starts_with(&format!("{dir}/")))
+            && best
+                .map(|current| dir.len() > current.len())
+                .unwrap_or(true)
+        {
+            best = Some(dir);
+        }
+    }
+    best.map(str::to_string)
 }
