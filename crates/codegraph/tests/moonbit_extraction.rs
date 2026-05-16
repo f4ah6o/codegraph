@@ -162,12 +162,116 @@ fn context_guides_when_no_symbols_match() {
     )
     .unwrap();
     fs::write(dir.path().join("moon.pkg.json"), "{}").unwrap();
-    fs::write(dir.path().join("lib.mbt"), "pub fn known_symbol() -> Int { 1 }\n").unwrap();
+    fs::write(
+        dir.path().join("lib.mbt"),
+        "pub fn known_symbol() -> Int { 1 }\n",
+    )
+    .unwrap();
 
     let project = dir.path().to_str().unwrap();
     run(&["init", project, "--index"]);
 
     let output = run(&["context", "zzzz_no_matching_symbol", "--path", project]);
-    assert!(output.contains("No matching symbols or files were found"), "{output}");
+    assert!(
+        output.contains("No matching symbols or files were found"),
+        "{output}"
+    );
     assert!(output.contains("cgz query --json"), "{output}");
+}
+
+#[test]
+fn affected_includes_moonbit_same_package_tests() {
+    let dir = TempDir::new().unwrap();
+    fs::write(
+        dir.path().join("moon.mod.json"),
+        r#"{"name":"example/calver"}"#,
+    )
+    .unwrap();
+    fs::write(dir.path().join("moon.pkg.json"), "{}").unwrap();
+    fs::write(
+        dir.path().join("parse.mbt"),
+        "pub fn parse() -> Int { 1 }\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("scheme.mbt"),
+        "pub fn scheme() -> Int { 2 }\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("parse_test.mbt"),
+        "test { inspect(parse(), content=\"1\") }\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("parse_wbtest.mbt"),
+        "test { inspect(scheme(), content=\"2\") }\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("README.mbt.md"),
+        "# Example\n\n```mbt check\ntest { inspect(parse(), content=\"1\") }\n```\n",
+    )
+    .unwrap();
+    fs::create_dir_all(dir.path().join("other")).unwrap();
+    fs::write(dir.path().join("other/moon.pkg.json"), "{}").unwrap();
+    fs::write(
+        dir.path().join("other/other_test.mbt"),
+        "test { inspect(1, content=\"1\") }\n",
+    )
+    .unwrap();
+
+    let project = dir.path().to_str().unwrap();
+    run(&["init", project, "--index"]);
+
+    let output = run(&[
+        "affected",
+        "parse.mbt",
+        "scheme.mbt",
+        "--path",
+        project,
+        "--json",
+    ]);
+    let value: Value = serde_json::from_str(&output).unwrap();
+    let tests = value["affectedTests"].as_array().unwrap();
+    assert!(tests.iter().any(|v| v == "README.mbt.md"), "{output}");
+    assert!(tests.iter().any(|v| v == "parse_test.mbt"), "{output}");
+    assert!(tests.iter().any(|v| v == "parse_wbtest.mbt"), "{output}");
+    assert!(
+        !tests.iter().any(|v| v == "other/other_test.mbt"),
+        "{output}"
+    );
+    assert!(
+        value["debug"].as_array().unwrap().iter().any(|entry| {
+            entry["reason"]
+                .as_str()
+                .unwrap()
+                .contains("MoonBit same-package")
+        }),
+        "{output}"
+    );
+}
+
+#[test]
+fn affected_keeps_direct_moonbit_test_input() {
+    let dir = TempDir::new().unwrap();
+    fs::write(
+        dir.path().join("moon.mod.json"),
+        r#"{"name":"example/calver"}"#,
+    )
+    .unwrap();
+    fs::write(dir.path().join("moon.pkg.json"), "{}").unwrap();
+    fs::write(
+        dir.path().join("parse_test.mbt"),
+        "test { inspect(1, content=\"1\") }\n",
+    )
+    .unwrap();
+
+    let project = dir.path().to_str().unwrap();
+    run(&["init", project, "--index"]);
+
+    let output = run(&["affected", "parse_test.mbt", "--path", project, "--json"]);
+    let value: Value = serde_json::from_str(&output).unwrap();
+    let tests = value["affectedTests"].as_array().unwrap();
+    assert_eq!(tests, &[Value::String("parse_test.mbt".into())]);
 }
