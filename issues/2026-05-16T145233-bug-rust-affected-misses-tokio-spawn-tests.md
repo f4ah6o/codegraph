@@ -48,3 +48,47 @@ Rust source file 変更時に、file stem と test file 名を照合する name 
 `debug[].matchedBy.rustNameHeuristic` にこの経路で一致した test を出すようにし、
 direct test input / import dependents / MoonBit same-package と区別できるようにした。
 `tokio/src/task/spawn.rs` と `tokio/tests/task_spawn.rs` の fixture で回帰テストを追加した。
+
+## Reopened: 2026-05-16
+
+別の Rust crate として `BurntSushi/ripgrep` で確認したところ、name heuristic だけでは
+Rust workspace の affected test 候補を十分に拾えないケースが残っていた。
+
+再現手順:
+
+```bash
+git clone --depth 1 https://github.com/BurntSushi/ripgrep.git /tmp/ripgrep
+cargo build -p cgz
+target/debug/cgz init /tmp/ripgrep
+target/debug/cgz index /tmp/ripgrep
+target/debug/cgz affected crates/searcher/src/searcher/mod.rs --path /tmp/ripgrep --json
+target/debug/cgz affected crates/searcher/src/searcher/glue.rs --path /tmp/ripgrep --json
+target/debug/cgz affected crates/core/search.rs --path /tmp/ripgrep --json
+```
+
+index 結果:
+
+```text
+Indexed 101 files, 7557 nodes, 17309 edges in 17408ms
+```
+
+実際の結果:
+
+`crates/searcher/src/searcher/mod.rs`、`crates/searcher/src/searcher/glue.rs`、
+`crates/core/search.rs` はいずれも affected tests が 0 件で warning になる。
+一方で `cgz context "How does Searcher work?" --path /tmp/ripgrep` は
+`crates/searcher/src/searcher/mod.rs` の `pub struct Searcher` や
+`crates/core/flags/hiargs.rs` の `searcher()` builder を返せている。
+
+補足:
+
+`crates/searcher/src/searcher/core.rs` では `crates/matcher/tests/util.rs` が
+import dependent として 1 件だけ返るが、searcher crate 自体の tests や同一 crate 内の
+関連 test 候補には届かない。Rust の `mod` tree、workspace crate dependency、
+unit test / integration test 配置を使った affected test 推定がまだ不足している。
+
+期待する状態:
+
+Rust workspace では file stem 一致だけでなく、crate/package 単位、`mod.rs` 配下、
+同一 crate の `tests` / `#[cfg(test)]` を含む source file、workspace 内 dependent crate の
+integration tests まで候補にできる必要がある。
