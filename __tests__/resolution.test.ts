@@ -4,7 +4,7 @@
  * Tests for Phase 3: Reference Resolution
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -12,17 +12,24 @@ import { CodeGraph } from '../src';
 import { Node, UnresolvedReference } from '../src/types';
 import { ReferenceResolver, createResolver, ResolutionContext } from '../src/resolution';
 import { matchReference } from '../src/resolution/name-matcher';
-import { resolveImportPath, extractImportMappings } from '../src/resolution/import-resolver';
+import { resolveImportPath, extractImportMappings, extractReExports } from '../src/resolution/import-resolver';
 import { detectFrameworks, getAllFrameworkResolvers } from '../src/resolution/frameworks';
 import { QueryBuilder } from '../src/db/queries';
 import { DatabaseConnection } from '../src/db';
+import { initGrammars, loadGrammarsForLanguages } from '../src/extraction/grammars';
+
+beforeAll(async () => {
+  await initGrammars();
+  await loadGrammarsForLanguages(['typescript', 'javascript']);
+});
 
 describe('Resolution Module', () => {
   let tempDir: string;
-  let cg: CodeGraph;
+  let cg: CodeGraph | undefined;
 
   beforeEach(() => {
     // Create temp directory
+    cg = undefined;
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codegraph-resolution-test-'));
   });
 
@@ -331,6 +338,62 @@ import { baz, qux } from './baz';
       expect(mappings.length).toBeGreaterThan(0);
       expect(mappings.some((m) => m.localName === 'foo')).toBe(true);
       expect(mappings.some((m) => m.localName === 'bar')).toBe(true);
+    });
+
+    it('should extract complex JS/TS import mappings with tree-sitter', () => {
+      const content = `
+// import { ignored } from './commented';
+import defaultThing, {
+  alpha,
+  beta as localBeta,
+  type Gamma
+} from './multi';
+import * as utils from './utils';
+import './side-effect';
+const cjsDefault = require('./cjs-default');
+const { read, write: localWrite } = require('./cjs-named');
+`;
+
+      const mappings = extractImportMappings('src/index.ts', content, 'typescript');
+
+      expect(mappings).toEqual(expect.arrayContaining([
+        expect.objectContaining({ localName: 'defaultThing', exportedName: 'default', source: './multi', isDefault: true }),
+        expect.objectContaining({ localName: 'alpha', exportedName: 'alpha', source: './multi' }),
+        expect.objectContaining({ localName: 'localBeta', exportedName: 'beta', source: './multi' }),
+        expect.objectContaining({ localName: 'Gamma', exportedName: 'Gamma', source: './multi' }),
+        expect.objectContaining({ localName: 'utils', exportedName: '*', source: './utils', isNamespace: true }),
+        expect.objectContaining({ localName: 'cjsDefault', exportedName: 'default', source: './cjs-default' }),
+        expect.objectContaining({ localName: 'read', exportedName: 'read', source: './cjs-named' }),
+        expect.objectContaining({ localName: 'localWrite', exportedName: 'write', source: './cjs-named' }),
+      ]));
+      expect(mappings.some((m) => m.source === './commented')).toBe(false);
+      expect(mappings.some((m) => m.source === './side-effect')).toBe(false);
+    });
+
+    it('should extract JS/TS re-exports with tree-sitter', () => {
+      const content = `
+// export { ignored } from './commented';
+export {
+  alpha,
+  beta as localBeta,
+  default,
+  default as DefaultThing
+} from './multi';
+export * from './all';
+export * as ns from './namespace';
+`;
+
+      const reExports = extractReExports(content, 'typescript');
+
+      expect(reExports).toEqual(expect.arrayContaining([
+        { kind: 'named', exportedName: 'alpha', originalName: 'alpha', source: './multi' },
+        { kind: 'named', exportedName: 'localBeta', originalName: 'beta', source: './multi' },
+        { kind: 'named', exportedName: 'default', originalName: 'default', source: './multi' },
+        { kind: 'named', exportedName: 'DefaultThing', originalName: 'default', source: './multi' },
+        { kind: 'wildcard', source: './all' },
+        { kind: 'wildcard', source: './namespace' },
+      ]));
+      expect(reExports.some((r) => r.source === './commented')).toBe(false);
     });
 
     it('should extract Python import mappings', () => {

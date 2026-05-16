@@ -5,9 +5,12 @@
  */
 
 import * as path from 'path';
+import type { Node as SyntaxNode, Tree } from 'web-tree-sitter';
 import { Language, Node } from '../types';
 import { UnresolvedRef, ResolvedRef, ResolutionContext, ImportMapping, ReExport } from './types';
 import { applyAliases } from './path-aliases';
+import { getParser } from '../extraction/grammars';
+import { getChildByField, getNodeText } from '../extraction/tree-sitter-helpers';
 
 /**
  * Extension resolution order by language
@@ -212,7 +215,7 @@ export function extractImportMappings(
   const mappings: ImportMapping[] = [];
 
   if (language === 'typescript' || language === 'javascript' || language === 'tsx' || language === 'jsx') {
-    mappings.push(...extractJSImports(content));
+    mappings.push(...extractJSImports(content, language));
   } else if (language === 'python') {
     mappings.push(...extractPythonImports(content));
   } else if (language === 'go') {
@@ -226,8 +229,43 @@ export function extractImportMappings(
 
 /**
  * Extract JS/TS import mappings
+ *
+ * Uses tree-sitter when the JS/TS grammar is available, with the old
+ * regex scanner retained as a fallback for callers that use this module
+ * before grammar initialization.
  */
-function extractJSImports(content: string): ImportMapping[] {
+function extractJSImports(content: string, language: Language): ImportMapping[] {
+  return extractJSImportsWithTreeSitter(content, language) ?? extractJSImportsRegex(content);
+}
+
+function extractJSImportsWithTreeSitter(content: string, language: Language): ImportMapping[] | null {
+  const parsed = parseJsTs(content, language);
+  if (!parsed) return null;
+
+  const mappings: ImportMapping[] = [];
+  try {
+    walkNamed(parsed.tree.rootNode, (node) => {
+      if (node.type === 'import_statement') {
+        mappings.push(...extractImportStatementMappings(node, content));
+        return false;
+      }
+      if (node.type === 'variable_declarator') {
+        const requireSource = getRequireSource(node, content);
+        if (requireSource) {
+          mappings.push(...extractRequireMappings(node, content, requireSource));
+          return false;
+        }
+      }
+      return true;
+    });
+  } finally {
+    parsed.tree.delete();
+  }
+
+  return mappings;
+}
+
+function extractJSImportsRegex(content: string): ImportMapping[] {
   const mappings: ImportMapping[] = [];
 
   // ES6 imports
@@ -326,6 +364,183 @@ function extractJSImports(content: string): ImportMapping[] {
   }
 
   return mappings;
+}
+
+function parseJsTs(content: string, language: Language): { tree: Tree } | null {
+  if (!isJsTsLanguage(language)) return null;
+  const parser = getParser(language) ?? getParser(language === 'tsx' ? 'typescript' : language === 'jsx' ? 'javascript' : language);
+  if (!parser) return null;
+  const tree = parser.parse(content);
+  return tree ? { tree } : null;
+}
+
+function isJsTsLanguage(language: Language): boolean {
+  return language === 'typescript' || language === 'javascript' || language === 'tsx' || language === 'jsx';
+}
+
+function walkNamed(node: SyntaxNode, visit: (node: SyntaxNode) => boolean): void {
+  const shouldDescend = visit(node);
+  if (!shouldDescend) return;
+  for (let i = 0; i < node.namedChildCount; i++) {
+    const child = node.namedChild(i);
+    if (child) walkNamed(child, visit);
+  }
+}
+
+function extractImportStatementMappings(node: SyntaxNode, source: string): ImportMapping[] {
+  const moduleName = getStringLiteralValue(getChildByField(node, 'source') ?? findLastStringChild(node), source);
+  if (!moduleName) return [];
+
+  const mappings: ImportMapping[] = [];
+
+  walkNamed(node, (child) => {
+    if (child.type === 'import_specifier') {
+      const mapping = importSpecifierToMapping(child, source, moduleName);
+      if (mapping) mappings.push(mapping);
+      return false;
+    }
+    if (child.type === 'namespace_import') {
+      const local = identifierTexts(child, source).pop();
+      if (local) {
+        mappings.push({
+          localName: local,
+          exportedName: '*',
+          source: moduleName,
+          isDefault: false,
+          isNamespace: true,
+        });
+      }
+      return false;
+    }
+    return true;
+  });
+
+  const importClause = node.namedChildren.find((child) => child.type === 'import_clause');
+  if (importClause) {
+    for (const id of importClause.namedChildren) {
+      if (id.type === 'identifier') {
+        mappings.push({
+          localName: getNodeText(id, source),
+          exportedName: 'default',
+          source: moduleName,
+          isDefault: true,
+          isNamespace: false,
+        });
+      }
+    }
+  }
+
+  return dedupeImportMappings(mappings);
+}
+
+function importSpecifierToMapping(node: SyntaxNode, source: string, moduleName: string): ImportMapping | null {
+  const text = getNodeText(node, source).replace(/^type\s+/, '').trim();
+  const aliasMatch = text.match(/^([A-Za-z_$][\w$]*)\s+as\s+([A-Za-z_$][\w$]*)$/);
+  if (aliasMatch) {
+    return {
+      localName: aliasMatch[2]!,
+      exportedName: aliasMatch[1]!,
+      source: moduleName,
+      isDefault: false,
+      isNamespace: false,
+    };
+  }
+  const ids = identifierTexts(node, source);
+  const name = ids[ids.length - 1] ?? text;
+  if (!name) return null;
+  return {
+    localName: name,
+    exportedName: name,
+    source: moduleName,
+    isDefault: false,
+    isNamespace: false,
+  };
+}
+
+function getRequireSource(node: SyntaxNode, source: string): string | null {
+  const value = getChildByField(node, 'value');
+  if (!value || value.type !== 'call_expression') return null;
+  const fn = getChildByField(value, 'function') ?? value.namedChild(0);
+  if (!fn || getNodeText(fn, source) !== 'require') return null;
+  const args = getChildByField(value, 'arguments');
+  const literal = args?.namedChildren.find((child) => child.type === 'string');
+  return getStringLiteralValue(literal ?? null, source);
+}
+
+function extractRequireMappings(node: SyntaxNode, source: string, moduleName: string): ImportMapping[] {
+  const nameNode = getChildByField(node, 'name');
+  if (!nameNode) return [];
+
+  if (nameNode.type === 'identifier') {
+    return [{
+      localName: getNodeText(nameNode, source),
+      exportedName: 'default',
+      source: moduleName,
+      isDefault: true,
+      isNamespace: false,
+    }];
+  }
+
+  if (nameNode.type === 'object_pattern') {
+    return parseObjectPatternNames(getNodeText(nameNode, source)).map(({ exportedName, localName }) => ({
+      localName,
+      exportedName,
+      source: moduleName,
+      isDefault: false,
+      isNamespace: false,
+    }));
+  }
+
+  return [];
+}
+
+function parseObjectPatternNames(text: string): Array<{ exportedName: string; localName: string }> {
+  const inner = text.replace(/^\{/, '').replace(/\}$/, '');
+  return inner.split(',').map((raw) => raw.trim()).filter(Boolean).flatMap((item) => {
+    const alias = item.match(/^([A-Za-z_$][\w$]*)\s*:\s*([A-Za-z_$][\w$]*)$/);
+    if (alias) return [{ exportedName: alias[1]!, localName: alias[2]! }];
+    const name = item.match(/^([A-Za-z_$][\w$]*)$/)?.[1];
+    return name ? [{ exportedName: name, localName: name }] : [];
+  });
+}
+
+function identifierTexts(node: SyntaxNode, source: string): string[] {
+  const out: string[] = [];
+  walkNamed(node, (child) => {
+    if (child.type === 'identifier' || child.type === 'property_identifier') {
+      out.push(getNodeText(child, source));
+      return false;
+    }
+    return true;
+  });
+  return out;
+}
+
+function findLastStringChild(node: SyntaxNode): SyntaxNode | null {
+  let found: SyntaxNode | null = null;
+  walkNamed(node, (child) => {
+    if (child.type === 'string') {
+      found = child;
+      return false;
+    }
+    return true;
+  });
+  return found;
+}
+
+function getStringLiteralValue(node: SyntaxNode | null, source: string): string | null {
+  if (!node) return null;
+  return getNodeText(node, source).replace(/^['"]|['"]$/g, '');
+}
+
+function dedupeImportMappings(mappings: ImportMapping[]): ImportMapping[] {
+  const seen = new Set<string>();
+  return mappings.filter((mapping) => {
+    const key = `${mapping.localName}\0${mapping.exportedName}\0${mapping.source}\0${mapping.isDefault}\0${mapping.isNamespace}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 /**
@@ -522,20 +737,78 @@ function stripJsComments(content: string): string {
  *   export * as ns from './a';   (treated as wildcard for chasing)
  *   export { default as Foo } from './a';
  *
- * The walker intentionally stays regex-based — the import-resolver
- * elsewhere in this file already chooses regex over a fresh
- * tree-sitter pass, and this function shares that trade-off. Errors
- * fall through silently; resolution simply skips the broken file.
+ * Uses tree-sitter when the JS/TS grammar is available, with the old
+ * regex scanner retained as a fallback for callers that use this module
+ * before grammar initialization.
  */
 export function extractReExports(content: string, language: Language): ReExport[] {
   if (
-    language !== 'typescript' &&
-    language !== 'javascript' &&
-    language !== 'tsx' &&
-    language !== 'jsx'
+    !isJsTsLanguage(language)
   ) {
     return [];
   }
+
+  return extractReExportsWithTreeSitter(content, language) ?? extractReExportsRegex(content);
+}
+
+function extractReExportsWithTreeSitter(content: string, language: Language): ReExport[] | null {
+  const parsed = parseJsTs(content, language);
+  if (!parsed) return null;
+
+  const out: ReExport[] = [];
+  try {
+    walkNamed(parsed.tree.rootNode, (node) => {
+      if (node.type !== 'export_statement') return true;
+      const source = getStringLiteralValue(getChildByField(node, 'source') ?? findLastStringChild(node), content);
+      if (!source) return false;
+
+      const text = getNodeText(node, content);
+      if (/^export\s*\*/.test(text.trim())) {
+        out.push({ kind: 'wildcard', source });
+        return false;
+      }
+
+      const clause = node.namedChildren.find((child) =>
+        child.type === 'export_clause' ||
+        child.type === 'named_exports' ||
+        child.type === 'export_specifier'
+      );
+      const clauseText = clause ? getNodeText(clause, content) : text;
+      for (const spec of parseExportSpecifiers(clauseText)) {
+        out.push({ ...spec, source });
+      }
+      return false;
+    });
+  } finally {
+    parsed.tree.delete();
+  }
+
+  return out;
+}
+
+function parseExportSpecifiers(text: string): Array<Omit<Extract<ReExport, { kind: 'named' }>, 'source'>> {
+  const match = text.match(/\{([\s\S]*)\}/);
+  const inner = match ? match[1]! : text;
+  return inner.split(',').map((raw) => raw.trim()).filter(Boolean).flatMap((item) => {
+    const clean = item.replace(/^type\s+/, '').trim();
+    const aliasMatch = clean.match(/^([A-Za-z_$][\w$]*|default)\s+as\s+([A-Za-z_$][\w$]*)$/);
+    if (aliasMatch) {
+      return [{
+        kind: 'named' as const,
+        exportedName: aliasMatch[2]!,
+        originalName: aliasMatch[1]!,
+      }];
+    }
+    const name = clean.match(/^([A-Za-z_$][\w$]*|default)$/)?.[1];
+    return name ? [{
+      kind: 'named' as const,
+      exportedName: name,
+      originalName: name,
+    }] : [];
+  });
+}
+
+function extractReExportsRegex(content: string): ReExport[] {
   const out: ReExport[] = [];
 
   // Pre-strip block comments + line comments so a commented-out
