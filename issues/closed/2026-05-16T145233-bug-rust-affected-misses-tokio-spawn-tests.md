@@ -92,3 +92,13 @@ unit test / integration test 配置を使った affected test 推定がまだ不
 Rust workspace では file stem 一致だけでなく、crate/package 単位、`mod.rs` 配下、
 同一 crate の `tests` / `#[cfg(test)]` を含む source file、workspace 内 dependent crate の
 integration tests まで候補にできる必要がある。
+
+## 解決方法
+
+Rust source file の affected 推定に workspace heuristic を追加した。`crates/<name>/...`
+または `src/` の位置から crate root を推定し、同一 crate の `tests/` 配下 Rust file と
+`#[cfg(test)]` / `#[test]` を含む Rust source file を affected test 候補に含める。
+
+`debug[].matchedBy.rustWorkspaceHeuristic` にこの経路で一致した候補を出すようにした。
+`crates/searcher/src/searcher/mod.rs` 変更時に `crates/searcher/tests/integration.rs` と
+同一 crate の inline test file を返し、別 crate の tests は返さない fixture を追加した。

@@ -166,6 +166,72 @@ fn affected_uses_rust_test_name_heuristic() {
     );
 }
 
+#[test]
+fn affected_uses_rust_workspace_heuristic() {
+    let dir = TempDir::new().unwrap();
+    fs::create_dir_all(dir.path().join("crates/searcher/src/searcher")).unwrap();
+    fs::create_dir_all(dir.path().join("crates/searcher/tests")).unwrap();
+    fs::write(
+        dir.path().join("crates/searcher/src/searcher/mod.rs"),
+        "pub struct Searcher;\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("crates/searcher/src/searcher/glue.rs"),
+        "pub fn glue() {}\n\n#[cfg(test)]\nmod tests { #[test] fn glue_unit() {} }\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("crates/searcher/tests/integration.rs"),
+        "#[test]\nfn searcher_integration() {}\n",
+    )
+    .unwrap();
+    fs::create_dir_all(dir.path().join("crates/other/tests")).unwrap();
+    fs::write(
+        dir.path().join("crates/other/tests/integration.rs"),
+        "#[test]\nfn other_integration() {}\n",
+    )
+    .unwrap();
+
+    let mut cg = CodeGraph::init(dir.path()).unwrap();
+    let index = cg.index_all().unwrap();
+    assert!(index.success, "{:?}", index.errors);
+
+    let report = cg
+        .build_affected_report(&["crates/searcher/src/searcher/mod.rs".to_string()])
+        .unwrap();
+
+    assert!(
+        report
+            .affected_tests
+            .iter()
+            .any(|test| test == "crates/searcher/tests/integration.rs"),
+        "{report:?}"
+    );
+    assert!(
+        report
+            .affected_tests
+            .iter()
+            .any(|test| test == "crates/searcher/src/searcher/glue.rs"),
+        "{report:?}"
+    );
+    assert!(
+        report.debug[0]
+            .matched_by
+            .rust_workspace_heuristic
+            .iter()
+            .any(|test| test == "crates/searcher/tests/integration.rs"),
+        "{report:?}"
+    );
+    assert!(
+        !report
+            .affected_tests
+            .iter()
+            .any(|test| test == "crates/other/tests/integration.rs"),
+        "{report:?}"
+    );
+}
+
 fn write_eval_fixture(root: &std::path::Path) {
     fs::create_dir_all(root.join("src")).unwrap();
     fs::write(

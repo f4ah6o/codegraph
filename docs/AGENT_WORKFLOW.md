@@ -53,7 +53,8 @@ For MCP clients, call `codegraph_context` with `format: "json"` for the same
 structured report.
 Use `cgz affected --json` when planning verification; its `debug[].matchedBy`
 field separates direct test inputs, import-dependent tests, MoonBit
-same-package tests, and Rust name-heuristic test matches.
+same-package tests, Rust name-heuristic test matches, and Rust workspace test
+matches.
 For MCP clients, call `codegraph_affected` with a `files` array to get the same
 affected-test report.
 

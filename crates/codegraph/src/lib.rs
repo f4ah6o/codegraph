@@ -168,6 +168,7 @@ impl CodeGraph {
                         import_dependents: Vec::new(),
                         moonbit_same_package: Vec::new(),
                         rust_name_heuristic: Vec::new(),
+                        rust_workspace_heuristic: Vec::new(),
                     },
                 });
                 continue;
@@ -197,18 +198,26 @@ impl CodeGraph {
                 matched.insert(test.clone());
                 affected.insert(test.clone());
             }
+            let rust_workspace_tests: BTreeSet<String> =
+                rust_workspace_heuristic_tests(&self.root, file, &indexed_files)
+                    .into_iter()
+                    .collect();
+            for test in &rust_workspace_tests {
+                matched.insert(test.clone());
+                affected.insert(test.clone());
+            }
 
             if matched.is_empty() {
                 warnings.push(format!(
-                    "{file}: no import-dependent tests, MoonBit same-package tests, or Rust name-heuristic tests found"
+                    "{file}: no import-dependent tests, MoonBit same-package tests, Rust name-heuristic tests, or Rust workspace tests found"
                 ));
             }
             debug.push(AffectedDebugEntry {
                 changed_file: file.clone(),
                 reason: if matched.is_empty() {
-                    "no import-dependent tests, MoonBit same-package tests, or Rust name-heuristic tests found".to_string()
+                    "no import-dependent tests, MoonBit same-package tests, Rust name-heuristic tests, or Rust workspace tests found".to_string()
                 } else {
-                    "matched import-dependent tests, MoonBit same-package tests, and/or Rust name-heuristic tests".to_string()
+                    "matched import-dependent tests, MoonBit same-package tests, Rust name-heuristic tests, and/or Rust workspace tests".to_string()
                 },
                 matched_tests: matched.into_iter().collect(),
                 matched_by: AffectedMatchSources {
@@ -216,6 +225,7 @@ impl CodeGraph {
                     import_dependents: import_dependents.into_iter().collect(),
                     moonbit_same_package: moonbit_tests.into_iter().collect(),
                     rust_name_heuristic: rust_tests.into_iter().collect(),
+                    rust_workspace_heuristic: rust_workspace_tests.into_iter().collect(),
                 },
             });
         }
@@ -635,5 +645,48 @@ fn rust_test_path_matches_stem(test_path: &str, stem: &str) -> bool {
                 || name.starts_with(&format!("{stem}_"))
                 || name.contains(&format!("_{stem}_"))
         })
+        .unwrap_or(false)
+}
+
+fn rust_workspace_heuristic_tests(
+    root: &Path,
+    file: &str,
+    indexed_files: &[FileRecord],
+) -> Vec<String> {
+    let Some(changed) = indexed_files.iter().find(|record| record.path == file) else {
+        return Vec::new();
+    };
+    if changed.language != Language::Rust || is_test_file(file) {
+        return Vec::new();
+    }
+    let Some(crate_root) = rust_crate_root(file) else {
+        return Vec::new();
+    };
+    indexed_files
+        .iter()
+        .filter(|record| record.language == Language::Rust)
+        .filter(|record| record.path != file)
+        .filter(|record| rust_crate_root(&record.path).as_deref() == Some(crate_root.as_str()))
+        .filter(|record| {
+            is_test_file(&record.path) || rust_file_contains_inline_tests(root, &record.path)
+        })
+        .map(|record| record.path.clone())
+        .collect()
+}
+
+fn rust_crate_root(file: &str) -> Option<String> {
+    let parts: Vec<&str> = file.split('/').collect();
+    if parts.len() >= 2 && parts[0] == "crates" {
+        return Some(format!("{}/{}", parts[0], parts[1]));
+    }
+    parts
+        .iter()
+        .position(|part| *part == "src")
+        .map(|index| parts[..index].join("/"))
+}
+
+fn rust_file_contains_inline_tests(root: &Path, file: &str) -> bool {
+    fs::read_to_string(root.join(file))
+        .map(|text| text.contains("#[cfg(test)]") || text.contains("#[test]"))
         .unwrap_or(false)
 }

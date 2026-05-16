@@ -362,6 +362,7 @@ pub struct AffectedMatchSources {
     pub import_dependents: Vec<String>,
     pub moonbit_same_package: Vec<String>,
     pub rust_name_heuristic: Vec<String>,
+    pub rust_workspace_heuristic: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
