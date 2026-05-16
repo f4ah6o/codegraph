@@ -34,11 +34,3 @@ walkdir = "2.5"
 
 [dev-dependencies]
 tempfile = "3.13"
-
-[[test]]
-name = "oracle_parity"
-path = "tests/oracle_parity.rs"
-required-features = ["oracle-tests"]
-
-[features]
-oracle-tests = []

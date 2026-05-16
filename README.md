@@ -3,8 +3,6 @@
 `cgz` is the Rust CLI in this repository. It builds and queries a local
 CodeGraph database under `.codegraph/`.
 
-The original upstream README is kept as `README.org.md`.
-
 ## Package
 
 | Field | Value |
@@ -12,12 +10,13 @@ The original upstream README is kept as `README.org.md`.
 | Crate | `cgz` |
 | Binary | `cgz` |
 | Library name | `codegraph` |
-| Current crate version | `2026.5.3` |
+| Current crate version | `2026.5.4` |
 | License | MIT |
 | Repository | `https://github.com/f4ah6o/codegraph` |
 
-The crate lives at `crates/codegraph`. The workspace root contains the Rust
-workspace files and the upstream TypeScript implementation.
+The crate lives at `crates/codegraph`. The workspace root is now a Rust Cargo
+workspace; the original TypeScript CodeGraph code is tracked separately on the
+`original-codegraph/main` branch.
 
 ## What cgz Stores
 
@@ -53,12 +52,6 @@ cargo build --release -p cgz
 
 ```bash
 cargo test --all --all-features
-```
-
-The `oracle_parity` test target requires the `oracle-tests` feature:
-
-```bash
-cargo test -p cgz --features oracle-tests --test oracle_parity
 ```
 
 ## Commands

@@ -7,6 +7,14 @@ a [GitHub Release](https://github.com/f4ah6o/codegraph/releases) tagged
 This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Changed
+- `main` now contains the Rust `cgz` workspace only, with the original
+  TypeScript CodeGraph implementation removed from the working tree.
+- Upstream TypeScript CodeGraph changes are tracked on `original-codegraph/main`
+  instead of being mixed into the Rust `cgz` branch.
+
 ## [2026.5.4] - 2026-05-16
 
 ### Added
@@ -45,7 +53,6 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 - The root README now documents the Rust `cgz` crate, its Cargo commands, and
   the currently implemented CLI surface.
-- The original upstream README is preserved as `README.org.md`.
 
 ## [0.7.6] - 2026-05-13
 

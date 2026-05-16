@@ -1,11 +1,9 @@
-# Dependencies
-node_modules/
-
 # Build output
 dist/
 target/
 
-.cmem
+# Legacy local dependencies from the previous TypeScript tree
+node_modules/
 
 # IDE
 .idea/
@@ -20,7 +18,6 @@ Thumbs.db
 
 # Test coverage
 /coverage/
-.nyc_output/
 
 # Environment
 .env
@@ -30,9 +27,6 @@ Thumbs.db
 # Logs
 *.log
 npm-debug.log*
-
-# TypeScript build info
-*.tsbuildinfo
 
 # SQLite WAL mode files
 *.db-wal
@@ -48,5 +42,3 @@ test_frameworks
 
 # Test language repos for manual testing
 test-languages/
-
-nul
