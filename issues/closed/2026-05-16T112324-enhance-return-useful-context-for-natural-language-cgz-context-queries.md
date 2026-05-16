@@ -86,3 +86,12 @@ target/debug/cgz context Json --path /tmp/moonbitlang-core
 前回の修正で空出力は改善されたが、自然文から `Json` のような短い CamelCase
 識別子を候補語として使えていない。自然文 task query の入口としては、ユーザーが
 型名や API 名を文章に含めた場合に該当 symbol へ到達できる必要がある。
+
+## 解決方法
+
+`context_search_terms` の重要語判定で、3 文字以上かつ ASCII uppercase を含む token
+を候補に含めるようにした。これにより `How is Json implemented?` のような自然文から
+短い CamelCase 型名 `Json` を抽出できる。
+
+MoonBit fixture に `pub enum Json` を含む再現テストを追加し、`cgz context "How is Json implemented?"`
+が `json.mbt` と `enum Json` を返すことを確認した。

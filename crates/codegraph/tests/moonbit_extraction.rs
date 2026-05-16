@@ -154,6 +154,38 @@ pub fn parse(input : String) -> String {
 }
 
 #[test]
+fn context_extracts_short_camel_case_type_from_natural_language() {
+    let dir = TempDir::new().unwrap();
+    fs::write(
+        dir.path().join("moon.mod.json"),
+        r#"{"name":"example/json"}"#,
+    )
+    .unwrap();
+    fs::write(dir.path().join("moon.pkg.json"), "{}").unwrap();
+    fs::write(
+        dir.path().join("json.mbt"),
+        r#"
+pub enum Json {
+  String(String)
+  Number(Double)
+}
+
+pub fn stringify(value : Json) -> String {
+  ""
+}
+"#,
+    )
+    .unwrap();
+
+    let project = dir.path().to_str().unwrap();
+    run(&["init", project, "--index"]);
+
+    let output = run(&["context", "How is Json implemented?", "--path", project]);
+    assert!(output.contains("enum Json"), "{output}");
+    assert!(output.contains("json.mbt"), "{output}");
+}
+
+#[test]
 fn context_json_returns_agent_friendly_evidence() {
     let dir = TempDir::new().unwrap();
     fs::write(

@@ -444,6 +444,7 @@ fn is_useful_context_term(term: &str) -> bool {
         || term.contains('.')
         || term.contains(':')
         || term.chars().any(|c| c.is_ascii_digit())
+        || term.chars().any(|c| c.is_ascii_uppercase())
         || term.len() >= 5
 }
 
