@@ -176,13 +176,35 @@ pub fn stringify(value : Json) -> String {
 "#,
     )
     .unwrap();
+    fs::write(
+        dir.path().join("show.mbt"),
+        r#"
+pub trait Show {
+  output(Self, Logger) -> Unit
+}
+"#,
+    )
+    .unwrap();
 
     let project = dir.path().to_str().unwrap();
     run(&["init", project, "--index"]);
 
-    let output = run(&["context", "How is Json implemented?", "--path", project]);
-    assert!(output.contains("enum Json"), "{output}");
-    assert!(output.contains("json.mbt"), "{output}");
+    let output = run(&[
+        "context",
+        "How is Json implemented?",
+        "--path",
+        project,
+        "--json",
+    ]);
+    let value: Value = serde_json::from_str(&output).unwrap();
+    let search_terms = value["search_terms"].as_array().unwrap();
+    assert!(!search_terms.iter().any(|term| term == "How"), "{output}");
+    assert!(search_terms.iter().any(|term| term == "Json"), "{output}");
+    assert_eq!(value["matches"][0]["node"]["name"], "Json", "{output}");
+    assert_eq!(
+        value["matches"][0]["node"]["file_path"], "json.mbt",
+        "{output}"
+    );
 }
 
 #[test]

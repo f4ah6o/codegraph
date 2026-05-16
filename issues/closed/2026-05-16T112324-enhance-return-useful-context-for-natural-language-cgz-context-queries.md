@@ -125,3 +125,13 @@ target/debug/cgz context "How is Json implemented?" --path /tmp/moonbitlang-core
 自然文 query では文頭 capitalization の英単語を重要語にしない。`Json` のような短い型名を拾う場合も、
 少なくとも stop word / question word の除外、または `Uppercase + lowercase...` だけではなく既存 symbol
 への exact match を優先するなど、普通の英文 token が fuzzy match で関連 context を押し出さないようにする。
+
+## 解決方法
+
+自然文 query の token 抽出で、`how`, `what`, `why`, `who`, `which`, `is`,
+`implemented` などの疑問文・説明文由来の stop word を除外した。これにより文頭
+capitalization の `How` が短い型名候補として扱われず、`Json` が優先して検索される。
+
+回帰テストでは `Show` / `output` を含む fixture に対して
+`cgz context "How is Json implemented?" --json` を実行し、`search_terms` に `How`
+が含まれず `Json` が含まれること、先頭 match が `json.mbt` の `Json` になることを固定した。
