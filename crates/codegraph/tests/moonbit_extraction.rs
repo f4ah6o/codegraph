@@ -325,6 +325,23 @@ fn affected_includes_moonbit_same_package_tests() {
         }),
         "{output}"
     );
+    assert!(
+        value["debug"].as_array().unwrap().iter().any(|entry| {
+            entry["changedFile"] == "parse.mbt"
+                && entry["matchedBy"]["moonbitSamePackage"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|test| test == "parse_test.mbt")
+                && entry["matchedBy"]["moonbitSamePackage"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|test| test == "README.mbt.md")
+        }),
+        "{output}"
+    );
+    assert!(value["warnings"].as_array().unwrap().is_empty(), "{output}");
 }
 
 #[test]
@@ -349,4 +366,9 @@ fn affected_keeps_direct_moonbit_test_input() {
     let value: Value = serde_json::from_str(&output).unwrap();
     let tests = value["affectedTests"].as_array().unwrap();
     assert_eq!(tests, &[Value::String("parse_test.mbt".into())]);
+    let debug = &value["debug"].as_array().unwrap()[0];
+    assert_eq!(
+        debug["matchedBy"]["directTestInput"],
+        Value::Array(vec![Value::String("parse_test.mbt".into())])
+    );
 }

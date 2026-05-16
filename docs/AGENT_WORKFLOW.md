@@ -35,6 +35,7 @@ cgz query --path <path> <symbol-or-file-term>
 cgz context --path <path> "<task or symbol>"
 cgz context --path <path> "<task or symbol>" --json
 cgz affected --path <path> <changed-file>...
+cgz affected --path <path> <changed-file>... --json
 ```
 
 For changed files from Git:
@@ -48,6 +49,9 @@ package names, and short domain terms. Natural-language task descriptions are
 accepted, but agents should still inspect the returned files before editing.
 Use `cgz context --json` when a machine-readable list of matched terms, files,
 symbols, and match reasons is more useful than markdown context.
+Use `cgz affected --json` when planning verification; its `debug[].matchedBy`
+field separates direct test inputs, import-dependent tests, and MoonBit
+same-package tests.
 
 ## Verification Boundary
 

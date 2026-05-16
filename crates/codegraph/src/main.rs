@@ -219,6 +219,7 @@ fn main() -> Result<()> {
             let indexed_files = cg.get_all_files()?;
             let mut affected = BTreeSet::new();
             let mut debug = Vec::new();
+            let mut warnings = Vec::new();
             for file in &files {
                 if is_test_file(file) {
                     affected.insert(file.clone());
@@ -226,20 +227,35 @@ fn main() -> Result<()> {
                         "changedFile": file,
                         "reason": "changed file is a test file",
                         "matchedTests": [file],
+                        "matchedBy": {
+                            "directTestInput": [file],
+                            "importDependents": [],
+                            "moonbitSamePackage": [],
+                        },
                     }));
                     continue;
                 }
                 let mut matched = BTreeSet::new();
+                let mut import_dependents = BTreeSet::new();
                 for dep in cg.get_file_dependents(file)? {
                     if is_test_file(&dep) {
+                        import_dependents.insert(dep.clone());
                         matched.insert(dep.clone());
                         affected.insert(dep);
                     }
                 }
-                let moonbit_tests = moonbit_same_package_tests(file, &indexed_files);
-                for test in moonbit_tests {
+                let moonbit_tests: BTreeSet<String> =
+                    moonbit_same_package_tests(file, &indexed_files)
+                        .into_iter()
+                        .collect();
+                for test in &moonbit_tests {
                     matched.insert(test.clone());
-                    affected.insert(test);
+                    affected.insert(test.clone());
+                }
+                if matched.is_empty() {
+                    warnings.push(format!(
+                        "{file}: no import-dependent tests or MoonBit same-package tests found"
+                    ));
                 }
                 debug.push(json!({
                     "changedFile": file,
@@ -249,6 +265,11 @@ fn main() -> Result<()> {
                         "matched import-dependent tests and/or MoonBit same-package tests"
                     },
                     "matchedTests": matched.into_iter().collect::<Vec<_>>(),
+                    "matchedBy": {
+                        "directTestInput": [],
+                        "importDependents": import_dependents.into_iter().collect::<Vec<_>>(),
+                        "moonbitSamePackage": moonbit_tests.into_iter().collect::<Vec<_>>(),
+                    },
                 }));
             }
             let affected: Vec<String> = affected.into_iter().collect();
@@ -259,6 +280,7 @@ fn main() -> Result<()> {
                         "changedFiles": files,
                         "affectedTests": affected,
                         "debug": debug,
+                        "warnings": warnings,
                     }))?
                 );
             } else {
