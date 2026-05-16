@@ -121,6 +121,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
+name = "cgz"
+version = "2026.5.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "ignore",
+ "octorus-tree-sitter-moonbit",
+ "parking_lot",
+ "regex",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "time",
+ "toml",
+ "tree-sitter",
+ "tree-sitter-rust",
+ "walkdir",
+]
+
+[[package]]
 name = "clap"
 version = "4.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -159,28 +181,6 @@ name = "clap_lex"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
-
-[[package]]
-name = "codegraph"
-version = "2026.5.0"
-dependencies = [
- "anyhow",
- "clap",
- "ignore",
- "octorus-tree-sitter-moonbit",
- "parking_lot",
- "regex",
- "rusqlite",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "time",
- "toml",
- "tree-sitter",
- "tree-sitter-rust",
- "walkdir",
-]
 
 [[package]]
 name = "colorchoice"

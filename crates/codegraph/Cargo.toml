@@ -1,5 +1,5 @@
 [package]
-name = "codegraph"
+name = "cgz"
 version = "2026.5.0"
 edition.workspace = true
 license.workspace = true
