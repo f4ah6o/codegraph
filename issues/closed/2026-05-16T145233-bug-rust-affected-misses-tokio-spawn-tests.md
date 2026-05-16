@@ -37,3 +37,14 @@ Model: GPT-5 Codex
 ## 補足
 
 `codegraph affected tokio/tests/task_spawn.rs --json` は変更ファイル自体を test として返すため、test file 判定は動作している。問題は source file から dependent test file への到達にある。
+
+## 解決方法
+
+Rust source file 変更時に、file stem と test file 名を照合する name heuristic を
+`build_affected_report` に追加した。たとえば `tokio/src/task/spawn.rs` の stem
+`spawn` は `tokio/tests/task_spawn.rs` に含まれるため、import dependent edge が
+未解決でも affected test 候補に含める。
+
+`debug[].matchedBy.rustNameHeuristic` にこの経路で一致した test を出すようにし、
+direct test input / import dependents / MoonBit same-package と区別できるようにした。
+`tokio/src/task/spawn.rs` と `tokio/tests/task_spawn.rs` の fixture で回帰テストを追加した。

@@ -113,6 +113,59 @@ fn search_ranking_prefers_exact_symbol_matches() {
     );
 }
 
+#[test]
+fn affected_uses_rust_test_name_heuristic() {
+    let dir = TempDir::new().unwrap();
+    fs::create_dir_all(dir.path().join("tokio/src/task")).unwrap();
+    fs::create_dir_all(dir.path().join("tokio/tests")).unwrap();
+    fs::write(
+        dir.path().join("tokio/src/task/spawn.rs"),
+        "pub fn spawn() {}\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("tokio/tests/task_spawn.rs"),
+        "#[test]\nfn spawn_runs_task() {}\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("tokio/tests/time_driver.rs"),
+        "#[test]\nfn time_driver_runs() {}\n",
+    )
+    .unwrap();
+
+    let mut cg = CodeGraph::init(dir.path()).unwrap();
+    let index = cg.index_all().unwrap();
+    assert!(index.success, "{:?}", index.errors);
+
+    let report = cg
+        .build_affected_report(&["tokio/src/task/spawn.rs".to_string()])
+        .unwrap();
+
+    assert!(
+        report
+            .affected_tests
+            .iter()
+            .any(|test| test == "tokio/tests/task_spawn.rs"),
+        "{report:?}"
+    );
+    assert!(
+        report.debug[0]
+            .matched_by
+            .rust_name_heuristic
+            .iter()
+            .any(|test| test == "tokio/tests/task_spawn.rs"),
+        "{report:?}"
+    );
+    assert!(
+        !report
+            .affected_tests
+            .iter()
+            .any(|test| test == "tokio/tests/time_driver.rs"),
+        "{report:?}"
+    );
+}
+
 fn write_eval_fixture(root: &std::path::Path) {
     fs::create_dir_all(root.join("src")).unwrap();
     fs::write(

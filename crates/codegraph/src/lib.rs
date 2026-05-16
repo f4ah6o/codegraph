@@ -167,6 +167,7 @@ impl CodeGraph {
                         direct_test_input: vec![file.clone()],
                         import_dependents: Vec::new(),
                         moonbit_same_package: Vec::new(),
+                        rust_name_heuristic: Vec::new(),
                     },
                 });
                 continue;
@@ -189,24 +190,32 @@ impl CodeGraph {
                 matched.insert(test.clone());
                 affected.insert(test.clone());
             }
+            let rust_tests: BTreeSet<String> = rust_name_heuristic_tests(file, &indexed_files)
+                .into_iter()
+                .collect();
+            for test in &rust_tests {
+                matched.insert(test.clone());
+                affected.insert(test.clone());
+            }
 
             if matched.is_empty() {
                 warnings.push(format!(
-                    "{file}: no import-dependent tests or MoonBit same-package tests found"
+                    "{file}: no import-dependent tests, MoonBit same-package tests, or Rust name-heuristic tests found"
                 ));
             }
             debug.push(AffectedDebugEntry {
                 changed_file: file.clone(),
                 reason: if matched.is_empty() {
-                    "no import-dependent tests or MoonBit same-package tests found".to_string()
+                    "no import-dependent tests, MoonBit same-package tests, or Rust name-heuristic tests found".to_string()
                 } else {
-                    "matched import-dependent tests and/or MoonBit same-package tests".to_string()
+                    "matched import-dependent tests, MoonBit same-package tests, and/or Rust name-heuristic tests".to_string()
                 },
                 matched_tests: matched.into_iter().collect(),
                 matched_by: AffectedMatchSources {
                     direct_test_input: Vec::new(),
                     import_dependents: import_dependents.into_iter().collect(),
                     moonbit_same_package: moonbit_tests.into_iter().collect(),
+                    rust_name_heuristic: rust_tests.into_iter().collect(),
                 },
             });
         }
@@ -579,4 +588,45 @@ fn moonbit_package_dir(file: &str, indexed_files: &[FileRecord]) -> Option<Strin
         }
     }
     best.map(str::to_string)
+}
+
+fn rust_name_heuristic_tests(file: &str, indexed_files: &[FileRecord]) -> Vec<String> {
+    let Some(changed) = indexed_files.iter().find(|record| record.path == file) else {
+        return Vec::new();
+    };
+    if changed.language != Language::Rust || is_test_file(file) {
+        return Vec::new();
+    }
+    let Some(stem) = file
+        .rsplit('/')
+        .next()
+        .and_then(|name| name.strip_suffix(".rs"))
+    else {
+        return Vec::new();
+    };
+    if stem.len() < 3 {
+        return Vec::new();
+    }
+    indexed_files
+        .iter()
+        .filter(|record| record.language == Language::Rust)
+        .filter(|record| is_test_file(&record.path))
+        .filter(|record| rust_test_path_matches_stem(&record.path, stem))
+        .map(|record| record.path.clone())
+        .collect()
+}
+
+fn rust_test_path_matches_stem(test_path: &str, stem: &str) -> bool {
+    test_path
+        .rsplit('/')
+        .next()
+        .unwrap_or(test_path)
+        .strip_suffix(".rs")
+        .map(|name| {
+            name == stem
+                || name.ends_with(&format!("_{stem}"))
+                || name.starts_with(&format!("{stem}_"))
+                || name.contains(&format!("_{stem}_"))
+        })
+        .unwrap_or(false)
 }
