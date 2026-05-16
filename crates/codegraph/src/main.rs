@@ -150,6 +150,19 @@ fn main() -> Result<()> {
                 println!("Nodes: {}", stats.node_count);
                 println!("Edges: {}", stats.edge_count);
                 println!("DB Size: {} bytes", stats.db_size_bytes);
+                println!(
+                    "Last Indexed At: {}",
+                    format_optional_timestamp_ms(stats.last_indexed_at)
+                );
+                println!(
+                    "Oldest Indexed At: {}",
+                    format_optional_timestamp_ms(stats.oldest_indexed_at)
+                );
+                println!(
+                    "Newest Modified At: {}",
+                    format_optional_timestamp_ms(stats.newest_modified_at)
+                );
+                println!("Stale Files: {}", stats.stale_file_count);
                 println!("Files by Language:");
                 for (lang, count) in stats.files_by_language {
                     println!("  {lang:<15} {count}");
@@ -264,4 +277,10 @@ fn print_index_result(result: &codegraph::types::IndexResult) {
             eprintln!("  {err}");
         }
     }
+}
+
+fn format_optional_timestamp_ms(value: Option<i64>) -> String {
+    value
+        .map(|ms| ms.to_string())
+        .unwrap_or_else(|| "unknown".to_string())
 }

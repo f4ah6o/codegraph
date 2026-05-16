@@ -130,10 +130,12 @@ fn mcp_lists_and_calls_status() {
     assert!(tools
         .iter()
         .any(|tool| tool["name"] == "codegraph_affected"));
-    assert!(responses[2]["result"]["content"][0]["text"]
+    let status_text = responses[2]["result"]["content"][0]["text"]
         .as_str()
-        .unwrap()
-        .contains("Files indexed"));
+        .unwrap();
+    assert!(status_text.contains("Files indexed"));
+    assert!(status_text.contains("Last indexed at"));
+    assert!(status_text.contains("Stale files"));
     assert!(responses[3]["result"]["content"][0]["text"]
         .as_str()
         .unwrap()

@@ -255,8 +255,12 @@ impl MCPServer {
             "codegraph_status" => {
                 let stats = cg.stats()?;
                 Ok(text_result(format!(
-                    "**Files indexed:** {}\n**Nodes:** {}\n**Edges:** {}",
-                    stats.file_count, stats.node_count, stats.edge_count
+                    "**Files indexed:** {}\n**Nodes:** {}\n**Edges:** {}\n**Last indexed at:** {}\n**Stale files:** {}",
+                    stats.file_count,
+                    stats.node_count,
+                    stats.edge_count,
+                    format_optional_timestamp_ms(stats.last_indexed_at),
+                    stats.stale_file_count
                 )))
             }
             "codegraph_files" => {
@@ -472,6 +476,12 @@ fn format_node_edges(title: &str, edges: &[NodeEdge], limit: usize) -> String {
 
 fn text_result(text: String) -> Value {
     json!({ "content": [{ "type": "text", "text": text }] })
+}
+
+fn format_optional_timestamp_ms(value: Option<i64>) -> String {
+    value
+        .map(|ms| ms.to_string())
+        .unwrap_or_else(|| "unknown".to_string())
 }
 
 fn error_response(id: Value, code: i64, message: &str) -> Value {

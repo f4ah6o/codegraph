@@ -285,6 +285,10 @@ pub struct GraphStats {
     pub node_count: i64,
     pub edge_count: i64,
     pub db_size_bytes: i64,
+    pub oldest_indexed_at: Option<i64>,
+    pub last_indexed_at: Option<i64>,
+    pub newest_modified_at: Option<i64>,
+    pub stale_file_count: i64,
     pub files_by_language: Vec<(String, i64)>,
     pub nodes_by_kind: Vec<(String, i64)>,
 }

@@ -246,6 +246,20 @@ impl Database {
         let db_size_bytes = std::fs::metadata(&self.path)
             .map(|m| m.len() as i64)
             .unwrap_or_default();
+        let oldest_indexed_at =
+            self.conn
+                .query_row("SELECT MIN(indexed_at) FROM files", [], |r| r.get(0))?;
+        let last_indexed_at =
+            self.conn
+                .query_row("SELECT MAX(indexed_at) FROM files", [], |r| r.get(0))?;
+        let newest_modified_at =
+            self.conn
+                .query_row("SELECT MAX(modified_at) FROM files", [], |r| r.get(0))?;
+        let stale_file_count = self.conn.query_row(
+            "SELECT COUNT(*) FROM files WHERE modified_at > indexed_at",
+            [],
+            |r| r.get(0),
+        )?;
         let files_by_language = grouped_counts(
             &self.conn,
             "SELECT language, COUNT(*) FROM files GROUP BY language",
@@ -257,6 +271,10 @@ impl Database {
             node_count,
             edge_count,
             db_size_bytes,
+            oldest_indexed_at,
+            last_indexed_at,
+            newest_modified_at,
+            stale_file_count,
             files_by_language,
             nodes_by_kind,
         })

@@ -66,3 +66,6 @@ commands such as tests, type checks, linters, or build commands.
 
 If results look stale or incomplete, run `cgz status <path>` again and ask for an
 explicit indexing step before relying on the graph.
+`cgz status --json` includes `last_indexed_at`, `oldest_indexed_at`,
+`newest_modified_at`, and `stale_file_count` so agents can report whether an
+index appears fresh before using graph results.
