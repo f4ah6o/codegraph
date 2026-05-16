@@ -116,3 +116,58 @@ pub fn documented(value : String) -> String {
         .iter()
         .any(|(kind, name, _)| kind == "module" && name == "example/graph"));
 }
+
+#[test]
+fn context_extracts_symbol_terms_from_natural_language() {
+    let dir = TempDir::new().unwrap();
+    fs::write(
+        dir.path().join("moon.mod.json"),
+        r#"{"name":"example/calver"}"#,
+    )
+    .unwrap();
+    fs::write(dir.path().join("moon.pkg.json"), "{}").unwrap();
+    fs::write(
+        dir.path().join("parse.mbt"),
+        r#"
+pub fn parse_with_scheme(input : String) -> String {
+  input
+}
+
+pub fn parse(input : String) -> String {
+  parse_with_scheme(input)
+}
+"#,
+    )
+    .unwrap();
+
+    let project = dir.path().to_str().unwrap();
+    run(&["init", project, "--index"]);
+
+    let output = run(&[
+        "context",
+        "change parse_with_scheme validation for invalid scheme order",
+        "--path",
+        project,
+    ]);
+    assert!(output.contains("parse_with_scheme"), "{output}");
+    assert!(output.contains("pub fn parse_with_scheme"), "{output}");
+}
+
+#[test]
+fn context_guides_when_no_symbols_match() {
+    let dir = TempDir::new().unwrap();
+    fs::write(
+        dir.path().join("moon.mod.json"),
+        r#"{"name":"example/empty"}"#,
+    )
+    .unwrap();
+    fs::write(dir.path().join("moon.pkg.json"), "{}").unwrap();
+    fs::write(dir.path().join("lib.mbt"), "pub fn known_symbol() -> Int { 1 }\n").unwrap();
+
+    let project = dir.path().to_str().unwrap();
+    run(&["init", project, "--index"]);
+
+    let output = run(&["context", "zzzz_no_matching_symbol", "--path", project]);
+    assert!(output.contains("No matching symbols or files were found"), "{output}");
+    assert!(output.contains("cgz query --json"), "{output}");
+}

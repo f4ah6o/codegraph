@@ -11,6 +11,7 @@ use db::Database;
 use extraction::{detect_language, extract_from_source, should_include_file};
 use graph::{GraphTraverser, Subgraph};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use types::{FileRecord, GraphStats, IndexResult, Node, NodeEdge, SearchOptions, SearchResult};
@@ -146,14 +147,14 @@ impl CodeGraph {
     }
 
     pub fn build_context(&self, task: &str, max_nodes: i64, include_code: bool) -> Result<String> {
-        let results = self.search_nodes(
-            task,
-            SearchOptions {
-                limit: max_nodes,
-                ..Default::default()
-            },
-        )?;
+        let results = self.find_context_nodes(task, max_nodes)?;
         let mut out = format!("## Context: {task}\n\n");
+        if results.is_empty() {
+            out.push_str("No matching symbols or files were found.\n\n");
+            out.push_str("Try a concrete symbol name, file name, package/module name, or a shorter code term. ");
+            out.push_str("For candidate discovery, run `cgz query --json <term>`.\n");
+            return Ok(out);
+        }
         for result in results {
             let n = result.node;
             out.push_str(&format!(
@@ -177,6 +178,36 @@ impl CodeGraph {
                 }
             }
         }
+        Ok(out)
+    }
+
+    fn find_context_nodes(&self, task: &str, max_nodes: i64) -> Result<Vec<SearchResult>> {
+        let limit = max_nodes.max(1);
+        let mut out = Vec::new();
+        let mut seen = BTreeSet::new();
+
+        for term in context_search_terms(task) {
+            if out.len() >= limit as usize {
+                break;
+            }
+            let remaining = limit - out.len() as i64;
+            let results = self.search_nodes(
+                &term,
+                SearchOptions {
+                    limit: remaining,
+                    ..Default::default()
+                },
+            )?;
+            for result in results {
+                if seen.insert(result.node.id.clone()) {
+                    out.push(result);
+                    if out.len() >= limit as usize {
+                        break;
+                    }
+                }
+            }
+        }
+
         Ok(out)
     }
 
@@ -221,6 +252,84 @@ impl CodeGraph {
         Ok(out)
     }
 }
+
+fn context_search_terms(task: &str) -> Vec<String> {
+    let mut terms = Vec::new();
+    let mut seen = BTreeSet::new();
+    push_context_term(task.trim(), &mut terms, &mut seen);
+
+    for raw in task.split(|c: char| {
+        !(c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '/' || c == '.' || c == ':')
+    }) {
+        let term = raw.trim_matches(|c: char| {
+            !(c.is_ascii_alphanumeric() || c == '_' || c == '/' || c == '.' || c == ':')
+        });
+        if is_useful_context_term(term) {
+            push_context_term(term, &mut terms, &mut seen);
+        }
+    }
+
+    terms
+}
+
+fn push_context_term(term: &str, terms: &mut Vec<String>, seen: &mut BTreeSet<String>) {
+    if term.is_empty() {
+        return;
+    }
+    let key = term.to_ascii_lowercase();
+    if seen.insert(key) {
+        terms.push(term.to_string());
+    }
+}
+
+fn is_useful_context_term(term: &str) -> bool {
+    if term.len() < 3 {
+        return false;
+    }
+    if CONTEXT_STOP_WORDS.contains(&term.to_ascii_lowercase().as_str()) {
+        return false;
+    }
+    term.contains('_')
+        || term.contains('/')
+        || term.contains('.')
+        || term.contains(':')
+        || term.chars().any(|c| c.is_ascii_digit())
+        || term.len() >= 5
+}
+
+const CONTEXT_STOP_WORDS: &[&str] = &[
+    "about",
+    "after",
+    "before",
+    "build",
+    "change",
+    "check",
+    "code",
+    "context",
+    "debug",
+    "error",
+    "feature",
+    "files",
+    "fix",
+    "from",
+    "handle",
+    "implement",
+    "invalid",
+    "issue",
+    "order",
+    "query",
+    "return",
+    "should",
+    "task",
+    "test",
+    "tests",
+    "update",
+    "valid",
+    "validation",
+    "when",
+    "where",
+    "with",
+];
 
 pub fn is_initialized(root: impl AsRef<Path>) -> bool {
     root.as_ref()

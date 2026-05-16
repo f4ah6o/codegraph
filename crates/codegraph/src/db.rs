@@ -277,10 +277,11 @@ impl Database {
 
         let rows = match (options.kind, options.language) {
             (Some(k), Some(l)) => {
-                let sql = format!("{base} WHERE (name LIKE ? OR qualified_name LIKE ? OR signature LIKE ?) AND kind = ? AND language = ?{order}");
+                let sql = format!("{base} WHERE (name LIKE ? OR qualified_name LIKE ? OR signature LIKE ? OR file_path LIKE ?) AND kind = ? AND language = ?{order}");
                 let mut stmt = self.conn.prepare(&sql)?;
                 let nodes = collect_nodes(stmt.query_map(
                     params![
+                        pattern,
                         pattern,
                         pattern,
                         pattern,
@@ -295,28 +296,46 @@ impl Database {
                 nodes
             }
             (Some(k), None) => {
-                let sql = format!("{base} WHERE (name LIKE ? OR qualified_name LIKE ? OR signature LIKE ?) AND kind = ?{order}");
+                let sql = format!("{base} WHERE (name LIKE ? OR qualified_name LIKE ? OR signature LIKE ? OR file_path LIKE ?) AND kind = ?{order}");
                 let mut stmt = self.conn.prepare(&sql)?;
                 let nodes = collect_nodes(stmt.query_map(
-                    params![pattern, pattern, pattern, k.as_str(), exact, prefix, limit],
+                    params![
+                        pattern,
+                        pattern,
+                        pattern,
+                        pattern,
+                        k.as_str(),
+                        exact,
+                        prefix,
+                        limit
+                    ],
                     node_from_row,
                 )?)?;
                 nodes
             }
             (None, Some(l)) => {
-                let sql = format!("{base} WHERE (name LIKE ? OR qualified_name LIKE ? OR signature LIKE ?) AND language = ?{order}");
+                let sql = format!("{base} WHERE (name LIKE ? OR qualified_name LIKE ? OR signature LIKE ? OR file_path LIKE ?) AND language = ?{order}");
                 let mut stmt = self.conn.prepare(&sql)?;
                 let nodes = collect_nodes(stmt.query_map(
-                    params![pattern, pattern, pattern, l.as_str(), exact, prefix, limit],
+                    params![
+                        pattern,
+                        pattern,
+                        pattern,
+                        pattern,
+                        l.as_str(),
+                        exact,
+                        prefix,
+                        limit
+                    ],
                     node_from_row,
                 )?)?;
                 nodes
             }
             (None, None) => {
-                let sql = format!("{base} WHERE (name LIKE ? OR qualified_name LIKE ? OR signature LIKE ?){order}");
+                let sql = format!("{base} WHERE (name LIKE ? OR qualified_name LIKE ? OR signature LIKE ? OR file_path LIKE ?){order}");
                 let mut stmt = self.conn.prepare(&sql)?;
                 let nodes = collect_nodes(stmt.query_map(
-                    params![pattern, pattern, pattern, exact, prefix, limit],
+                    params![pattern, pattern, pattern, pattern, exact, prefix, limit],
                     node_from_row,
                 )?)?;
                 nodes
