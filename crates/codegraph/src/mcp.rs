@@ -134,11 +134,17 @@ impl MCPServer {
                     .get("includeCode")
                     .and_then(Value::as_bool)
                     .unwrap_or(true);
-                Ok(text_result(cg.build_context(
-                    task,
-                    max_nodes,
-                    include_code,
-                )?))
+                if args.get("format").and_then(Value::as_str) == Some("json") {
+                    Ok(text_result(serde_json::to_string_pretty(
+                        &cg.build_context_report(task, max_nodes, include_code)?,
+                    )?))
+                } else {
+                    Ok(text_result(cg.build_context(
+                        task,
+                        max_nodes,
+                        include_code,
+                    )?))
+                }
             }
             "codegraph_callers" => {
                 let symbol = required_str(args, "symbol")?;
@@ -297,7 +303,7 @@ fn tools() -> Value {
         tool(
             "codegraph_context",
             "Build comprehensive context for a task.",
-            json!({"task": {"type":"string"}, "maxNodes": {"type":"number"}, "includeCode": {"type":"boolean"}, "projectPath": {"type":"string"}}),
+            json!({"task": {"type":"string"}, "maxNodes": {"type":"number"}, "includeCode": {"type":"boolean"}, "format": {"type":"string", "enum":["text", "json"]}, "projectPath": {"type":"string"}}),
             vec!["task"]
         ),
         tool(

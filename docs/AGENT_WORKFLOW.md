@@ -49,6 +49,8 @@ package names, and short domain terms. Natural-language task descriptions are
 accepted, but agents should still inspect the returned files before editing.
 Use `cgz context --json` when a machine-readable list of matched terms, files,
 symbols, and match reasons is more useful than markdown context.
+For MCP clients, call `codegraph_context` with `format: "json"` for the same
+structured report.
 Use `cgz affected --json` when planning verification; its `debug[].matchedBy`
 field separates direct test inputs, import-dependent tests, and MoonBit
 same-package tests.

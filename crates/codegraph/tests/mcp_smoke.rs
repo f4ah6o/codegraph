@@ -75,6 +75,24 @@ fn mcp_lists_and_calls_status() {
             })
         )
         .unwrap();
+        writeln!(
+            stdin,
+            "{}",
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 5,
+                "method": "tools/call",
+                "params": {
+                    "name": "codegraph_context",
+                    "arguments": {
+                        "task": "change process_data behavior",
+                        "format": "json",
+                        "includeCode": false
+                    }
+                }
+            })
+        )
+        .unwrap();
     }
 
     drop(child.stdin.take());
@@ -96,4 +114,14 @@ fn mcp_lists_and_calls_status() {
         .as_str()
         .unwrap()
         .contains("process_data"));
+    let context_text = responses[4]["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap();
+    let context: Value = serde_json::from_str(context_text).unwrap();
+    assert_eq!(context["query"], "change process_data behavior");
+    assert!(context["symbols"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|symbol| symbol["name"] == "process_data"));
 }
