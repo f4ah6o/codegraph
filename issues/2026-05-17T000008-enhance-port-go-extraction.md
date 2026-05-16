@@ -1,0 +1,26 @@
+# Port Go extraction
+
+Created: 2026-05-17
+Model: GPT-5 Codex
+
+## 背景
+
+original は Go の function、method、import 抽出を持つ。Rust `cgz` で Go project の impact/context を有効にするには、receiver method と grouped imports の対応が必要である。
+
+## 期待する状態
+
+- top-level functions と receiver methods を区別して抽出できる
+- grouped/single/aliased/dot/blank imports を記録できる
+- call references が basic graph traversal に接続できる
+
+## 実装メモ
+
+- Reference original files: `src/extraction/languages/go.ts`, `__tests__/extraction.test.ts`
+- Rust implementation area: `crates/codegraph/src/extraction*`, `crates/codegraph/tests/`
+- Go framework route resolver は別 issue で扱う
+
+## 検証
+
+- Go fixture tests
+- `cargo test --all --all-features`
+
