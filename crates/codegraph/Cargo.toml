@@ -1,6 +1,6 @@
 [package]
 name = "cgz"
-version = "2026.5.0"
+version = "2026.5.1"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
