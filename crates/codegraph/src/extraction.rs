@@ -274,6 +274,7 @@ fn extract_moonbit(
     };
 
     if try_extract_moonbit_tree_sitter(file_path, &source, now, nodes, edges, refs) {
+        extract_moonbit_sol_routes(file_path, &source, now, nodes, edges, refs);
         return;
     }
 
@@ -383,6 +384,233 @@ fn extract_moonbit(
         refs,
         r"([@A-Za-z_][@A-Za-z0-9_:/]*)\s*\(",
     );
+    extract_moonbit_sol_routes(file_path, &source, now, nodes, edges, refs);
+}
+
+fn extract_moonbit_sol_routes(
+    file_path: &str,
+    source: &str,
+    now: i64,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+    refs: &mut Vec<UnresolvedReference>,
+) {
+    if !file_path.ends_with(".mbt") && !file_path.ends_with(".mbt.md") {
+        return;
+    }
+
+    let safe = strip_moonbit_comments_preserve_lines(source);
+    let call_re = Regex::new(
+        r#"@(?:sol|router)\.(route|page|api_get|api_post|api_put|api_delete|api_patch|raw_get|raw_post|raw_put|raw_delete|raw_patch)\s*\(\s*"([^"]+)"\s*,\s*([@A-Za-z_][@A-Za-z0-9_:.]*)"#,
+    )
+    .unwrap();
+    let wrap_re = Regex::new(r#"@(?:sol|router)\.wrap\s*\(\s*"([^"]*)"\s*,"#).unwrap();
+    let constructor_re = Regex::new(
+        r#"SolRoutes::(Page|RawGet|RawPost|RawPut|RawDelete|RawPatch)\s*\([^)]*path\s*=\s*"([^"]+)"[^)]*handler\s*=\s*(?:PageHandler|RawHandler)?\(?\s*([@A-Za-z_][@A-Za-z0-9_:.]*)"#,
+    )
+    .unwrap();
+    let named_page_re = Regex::new(
+        r#"@(?:sol|router)\.page\s*\([^)]*path\s*=\s*"([^"]+)"[^)]*handler\s*=\s*([@A-Za-z_][@A-Za-z0-9_:.]*)"#,
+    )
+    .unwrap();
+
+    let mut prefix_stack: Vec<(usize, String)> = Vec::new();
+    let mut byte_offset = 0usize;
+    for line in safe.lines() {
+        let indent = line.chars().take_while(|c| c.is_whitespace()).count();
+        while prefix_stack
+            .last()
+            .map(|(stack_indent, _)| indent <= *stack_indent && line.trim_start().starts_with(']'))
+            .unwrap_or(false)
+        {
+            prefix_stack.pop();
+        }
+
+        if let Some(cap) = wrap_re.captures(line) {
+            let prefix = cap.get(1).map(|m| m.as_str()).unwrap_or("");
+            let full_prefix = join_route_paths(current_route_prefix(&prefix_stack), prefix);
+            prefix_stack.push((indent, full_prefix));
+        }
+
+        for cap in call_re.captures_iter(line) {
+            let helper = cap.get(1).unwrap().as_str();
+            let path = cap.get(2).unwrap().as_str();
+            let handler = cap.get(3).map(|m| clean_moonbit_handler(m.as_str()));
+            let route_path = join_route_paths(current_route_prefix(&prefix_stack), path);
+            add_moonbit_route_node(
+                file_path,
+                &safe,
+                byte_offset + cap.get(0).unwrap().start(),
+                helper_route_method(helper),
+                &route_path,
+                handler.as_deref(),
+                now,
+                nodes,
+                edges,
+                refs,
+            );
+        }
+
+        for cap in named_page_re.captures_iter(line) {
+            let path = cap.get(1).unwrap().as_str();
+            let handler = cap.get(2).map(|m| clean_moonbit_handler(m.as_str()));
+            let route_path = join_route_paths(current_route_prefix(&prefix_stack), path);
+            add_moonbit_route_node(
+                file_path,
+                &safe,
+                byte_offset + cap.get(0).unwrap().start(),
+                "PAGE",
+                &route_path,
+                handler.as_deref(),
+                now,
+                nodes,
+                edges,
+                refs,
+            );
+        }
+
+        for cap in constructor_re.captures_iter(line) {
+            let variant = cap.get(1).unwrap().as_str();
+            let path = cap.get(2).unwrap().as_str();
+            let handler = cap.get(3).map(|m| clean_moonbit_handler(m.as_str()));
+            let route_path = join_route_paths(current_route_prefix(&prefix_stack), path);
+            add_moonbit_route_node(
+                file_path,
+                &safe,
+                byte_offset + cap.get(0).unwrap().start(),
+                constructor_route_method(variant),
+                &route_path,
+                handler.as_deref(),
+                now,
+                nodes,
+                edges,
+                refs,
+            );
+        }
+
+        byte_offset += line.len() + 1;
+    }
+}
+
+fn add_moonbit_route_node(
+    file_path: &str,
+    source: &str,
+    byte_offset: usize,
+    method: &str,
+    route_path: &str,
+    handler: Option<&str>,
+    now: i64,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+    refs: &mut Vec<UnresolvedReference>,
+) {
+    let line = line_for(source, byte_offset);
+    let name = format!("{method} {route_path}");
+    let node = Node {
+        id: format!("route:{file_path}:{line}:{method}:{route_path}"),
+        kind: NodeKind::Route,
+        name,
+        qualified_name: format!("{file_path}::route:{method}:{route_path}"),
+        file_path: file_path.to_string(),
+        language: Language::MoonBit,
+        start_line: line,
+        end_line: line,
+        start_column: 0,
+        end_column: 0,
+        docstring: None,
+        signature: handler.map(|h| format!("{method} {route_path} -> {h}")),
+        visibility: None,
+        is_exported: false,
+        is_async: false,
+        is_static: false,
+        is_abstract: false,
+        updated_at: now,
+    };
+    add_contains(nodes, edges, &node);
+    if let Some(handler) = handler {
+        refs.push(unresolved(
+            &node.id,
+            handler,
+            EdgeKind::References,
+            file_path,
+            Language::MoonBit,
+            line,
+        ));
+    }
+    nodes.push(node);
+}
+
+fn helper_route_method(helper: &str) -> &'static str {
+    match helper {
+        "route" | "page" => "PAGE",
+        "api_get" => "GET",
+        "api_post" => "POST",
+        "api_put" => "PUT",
+        "api_delete" => "DELETE",
+        "api_patch" => "PATCH",
+        "raw_get" => "RAW GET",
+        "raw_post" => "RAW POST",
+        "raw_put" => "RAW PUT",
+        "raw_delete" => "RAW DELETE",
+        "raw_patch" => "RAW PATCH",
+        _ => "PAGE",
+    }
+}
+
+fn constructor_route_method(variant: &str) -> &'static str {
+    match variant {
+        "RawGet" => "RAW GET",
+        "RawPost" => "RAW POST",
+        "RawPut" => "RAW PUT",
+        "RawDelete" => "RAW DELETE",
+        "RawPatch" => "RAW PATCH",
+        _ => "PAGE",
+    }
+}
+
+fn current_route_prefix(prefix_stack: &[(usize, String)]) -> &str {
+    prefix_stack
+        .last()
+        .map(|(_, prefix)| prefix.as_str())
+        .unwrap_or("")
+}
+
+fn join_route_paths(prefix: &str, path: &str) -> String {
+    if prefix.is_empty() || prefix == "/" {
+        return normalize_route_path(path);
+    }
+    let path = normalize_route_path(path);
+    if path == "/" {
+        return normalize_route_path(prefix);
+    }
+    format!(
+        "{}/{}",
+        prefix.trim_end_matches('/'),
+        path.trim_start_matches('/')
+    )
+}
+
+fn normalize_route_path(path: &str) -> String {
+    if path.is_empty() {
+        return "/".into();
+    }
+    let path = path.replace('\\', "/");
+    if path.starts_with('/') {
+        path
+    } else {
+        format!("/{path}")
+    }
+}
+
+fn clean_moonbit_handler(handler: &str) -> String {
+    handler
+        .trim()
+        .trim_start_matches('@')
+        .rsplit(['.', ':'])
+        .next()
+        .unwrap_or(handler)
+        .trim_matches(')')
+        .to_string()
 }
 
 fn extract_moonbit_metadata(
@@ -1364,6 +1592,68 @@ fn extract_mbt_markdown_code_with_padding(source: &str) -> String {
             out.push_str(line);
         }
         out.push('\n');
+    }
+    out
+}
+
+fn strip_moonbit_comments_preserve_lines(source: &str) -> String {
+    let mut out = String::with_capacity(source.len());
+    let mut chars = source.chars().peekable();
+    let mut in_string = false;
+    let mut escaped = false;
+    while let Some(ch) = chars.next() {
+        if in_string {
+            out.push(ch);
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+
+        if ch == '"' {
+            in_string = true;
+            out.push(ch);
+            continue;
+        }
+
+        if ch == '/' && chars.peek() == Some(&'/') {
+            chars.next();
+            out.push(' ');
+            out.push(' ');
+            for next in chars.by_ref() {
+                if next == '\n' {
+                    out.push('\n');
+                    break;
+                }
+                out.push(' ');
+            }
+            continue;
+        }
+
+        if ch == '/' && chars.peek() == Some(&'*') {
+            chars.next();
+            out.push(' ');
+            out.push(' ');
+            let mut prev = '\0';
+            for next in chars.by_ref() {
+                if next == '\n' {
+                    out.push('\n');
+                } else {
+                    out.push(' ');
+                }
+                if prev == '*' && next == '/' {
+                    break;
+                }
+                prev = next;
+            }
+            continue;
+        }
+
+        out.push(ch);
     }
     out
 }

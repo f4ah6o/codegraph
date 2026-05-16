@@ -7,6 +7,13 @@ a [GitHub Release](https://github.com/f4ah6o/codegraph/releases) tagged
 This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026.5.4] - 2026-05-16
+
+### Added
+- `cgz` now indexes MoonBit Sol route declarations such as `@sol.route`,
+  `@sol.api_get`, `@router.raw_get`, and `SolRoutes::Page` as route symbols,
+  with handler references available through existing graph queries.
+
 ## [2026.5.3] - 2026-05-16
 
 ### Changed
@@ -53,6 +60,7 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   chmod +x "$(npm root -g)/@colbymchenry/codegraph/dist/bin/codegraph.js"
   ```
 
+[2026.5.4]: https://github.com/f4ah6o/codegraph/releases/tag/v2026.5.4
 [2026.5.3]: https://github.com/f4ah6o/codegraph/releases/tag/v2026.5.3
 [2026.5.2]: https://github.com/f4ah6o/codegraph/releases/tag/v2026.5.2
 [2026.5.1]: https://github.com/f4ah6o/codegraph/releases/tag/v2026.5.1
