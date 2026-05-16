@@ -1,6 +1,7 @@
 # Add first-class agent workflow guidance for cgz
 
 Created: 2026-05-16
+Completed: 2026-05-16
 Model: GPT-5 Codex
 
 ## 背景
@@ -35,3 +36,14 @@ git diff --name-only | xargs cgz affected --path .
 moonrepo 側には `cgz-workflow` skill と read-only `just cgz-*` helper を追加する。
 この issue は、同じ思想を codegraph 側の README、installer、または agent 向け
 ドキュメントへ反映するための追跡用。
+
+## 解決方法
+
+`docs/AGENT_WORKFLOW.md` を追加し、agent が最初に `cgz status <path>` で
+index 状態を確認すること、未初期化時の `cgz init -i <path>` は明示的な
+workspace-changing 操作として扱うこと、read-only 探索には `cgz files`,
+`cgz query`, `cgz context`, `cgz affected` を使うことを明記した。
+
+また README からこの workflow へリンクし、MCP server instructions にも
+CodeGraph の結果は探索補助であり最終確認は対象 repository の通常 test/check
+で行う、という境界を追加した。

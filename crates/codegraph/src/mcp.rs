@@ -6,7 +6,7 @@ use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
-const SERVER_INSTRUCTIONS: &str = "# Codegraph — code intelligence over an indexed knowledge graph\n\nUse codegraph_search for symbols, codegraph_context for task context, codegraph_callers/codegraph_callees for call flow, codegraph_impact for blast radius, codegraph_node for a symbol detail, codegraph_explore for broader surveys, codegraph_files for indexed files, and codegraph_status for index health.";
+const SERVER_INSTRUCTIONS: &str = "# Codegraph — code intelligence over an indexed knowledge graph\n\nStart with codegraph_status to check index health. Use codegraph_files, codegraph_search, codegraph_context, codegraph_callers/codegraph_callees, codegraph_impact, codegraph_node, and codegraph_explore for read-only exploration. Treat results as navigation context, not correctness proof; final validation still comes from the target repo's tests, type checks, linters, or build commands. Do not initialize or reindex a project unless the user explicitly asks for that workspace-changing action.";
 
 pub struct MCPServer {
     project_path: Option<PathBuf>,

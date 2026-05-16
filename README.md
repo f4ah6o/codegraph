@@ -80,6 +80,18 @@ cgz serve --mcp        # start the MCP server
 cgz unlock [path]      # remove .codegraph/codegraph.lock
 ```
 
+## Agent Workflow
+
+Agents should start with `cgz status <path>` before relying on graph results.
+If a project is not initialized, `cgz init -i <path>` is a deliberate
+workspace-changing operation, not a read-only discovery step.
+
+For day-to-day read-only exploration, use `cgz files`, `cgz query`,
+`cgz context`, and `cgz affected`. Treat their output as navigation context and
+finish with the target repository's normal tests, type checks, or build checks.
+
+See [docs/AGENT_WORKFLOW.md](./docs/AGENT_WORKFLOW.md) for the short playbook.
+
 Running `cgz` with no subcommand currently prints:
 
 ```text
