@@ -146,6 +146,13 @@ Releases are published to npm **and** mirrored as GitHub Releases on the
 where most users look for change history. `CHANGELOG.md` at the repo root is
 the source of truth — each GitHub Release's notes are extracted from it.
 
+## Pull Requests
+
+Create pull requests against the `origin` repository (`f4ah6o/codegraph`), not
+the `upstream` repository (`colbymchenry/codegraph`). If a PR is opened against
+upstream by mistake, leave an apology comment, close it, and recreate the PR on
+origin.
+
 ### Writing changelog entries
 
 When the user asks for a changelog entry for a new version:
