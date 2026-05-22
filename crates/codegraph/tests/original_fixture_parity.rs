@@ -998,3 +998,76 @@ async fn get_item_handler(_props : @sol.PageProps) -> Json { "{}" }
         "{results:?}"
     );
 }
+
+#[test]
+fn harness_extracts_web_framework_routes_and_handler_refs() {
+    let express = OriginalSourceFixture::new(
+        "src/server.ts",
+        r#"
+export function listUsers(req: Request, res: Response) {
+  res.json([]);
+}
+
+router.get("/api/users/:id", auth, listUsers);
+"#,
+    );
+
+    express.assert_node(NodeKind::Route, "GET /api/users/:id");
+    express.assert_reference(EdgeKind::References, "listUsers");
+
+    let fastapi = OriginalSourceFixture::new(
+        "app/main.py",
+        r##"
+@app.get("/api/items/{item_id}")
+async def get_item(item_id: str):
+    return {"id": item_id}
+"##,
+    );
+
+    fastapi.assert_node(NodeKind::Route, "GET /api/items/{item_id}");
+    fastapi.assert_reference(EdgeKind::References, "get_item");
+
+    let react_router = OriginalSourceFixture::new(
+        "src/App.tsx",
+        r#"
+export function CheckoutPage() {
+  return <div>Checkout</div>;
+}
+
+export function App() {
+  return <Route path="/checkout" element={<CheckoutPage />} />;
+}
+"#,
+    );
+
+    react_router.assert_node(NodeKind::Route, "PAGE /checkout");
+    react_router.assert_reference(EdgeKind::References, "CheckoutPage");
+}
+
+#[test]
+fn harness_extracts_file_based_web_routes() {
+    let next_route = OriginalSourceFixture::new(
+        "src/app/api/users/[id]/route.ts",
+        r#"
+export async function GET() {
+  return Response.json({});
+}
+"#,
+    );
+
+    next_route.assert_node(NodeKind::Route, "GET /api/users/:id");
+    next_route.assert_reference(EdgeKind::References, "GET");
+
+    let svelte_page = OriginalSourceFixture::new(
+        "src/routes/account/[id].svelte",
+        r#"
+<script>
+  export let data;
+</script>
+
+<h1>{data.name}</h1>
+"#,
+    );
+
+    svelte_page.assert_node(NodeKind::Route, "PAGE /account/:id");
+}

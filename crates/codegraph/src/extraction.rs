@@ -431,6 +431,8 @@ fn extract_typescript_javascript(
     add_ts_js_arrow_functions(file_path, source, language, now, nodes, edges);
     add_ts_js_imports(file_path, source, language, now, nodes, edges, refs);
     add_tsx_jsx_components(file_path, language, now, nodes, edges);
+    extract_web_file_routes(file_path, language, now, nodes, edges, refs);
+    extract_ts_js_framework_routes(file_path, source, language, now, nodes, edges, refs);
     add_call_refs(
         file_path,
         source,
@@ -439,6 +441,63 @@ fn extract_typescript_javascript(
         refs,
         r"([A-Za-z_$][A-Za-z0-9_$.]*)\s*\(",
     );
+}
+
+fn extract_ts_js_framework_routes(
+    file_path: &str,
+    source: &str,
+    language: Language,
+    now: i64,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+    refs: &mut Vec<UnresolvedReference>,
+) {
+    let express_re = Regex::new(
+        r#"(?:app|router|server)\.(get|post|put|patch|delete|all)\s*\(\s*['"`]([^'"`]+)['"`]\s*,\s*(?:[A-Za-z_$][A-Za-z0-9_$]*\s*,\s*)*([A-Za-z_$][A-Za-z0-9_$]*)"#,
+    )
+    .unwrap();
+    for cap in express_re.captures_iter(source) {
+        let method = cap.get(1).unwrap().as_str().to_ascii_uppercase();
+        let path_match = cap.get(2).unwrap();
+        let handler = cap.get(3).map(|m| m.as_str());
+        add_framework_route_node(
+            file_path,
+            language,
+            now,
+            nodes,
+            edges,
+            refs,
+            &method,
+            path_match.as_str(),
+            handler,
+            line_for(source, path_match.start()),
+            Some(cap.get(0).unwrap().as_str().trim().to_string()),
+            "web-framework",
+        );
+    }
+
+    let react_router_re = Regex::new(
+        r#"<Route\b[^>]*\bpath\s*=\s*["']([^"']+)["'][^>]*(?:\belement\s*=\s*\{\s*<\s*([A-Z][A-Za-z0-9_$]*)|\bComponent\s*=\s*\{\s*([A-Z][A-Za-z0-9_$]*))"#,
+    )
+    .unwrap();
+    for cap in react_router_re.captures_iter(source) {
+        let path_match = cap.get(1).unwrap();
+        let handler = cap.get(2).or_else(|| cap.get(3)).map(|m| m.as_str());
+        add_framework_route_node(
+            file_path,
+            language,
+            now,
+            nodes,
+            edges,
+            refs,
+            "PAGE",
+            path_match.as_str(),
+            handler,
+            line_for(source, path_match.start()),
+            Some(cap.get(0).unwrap().as_str().trim().to_string()),
+            "web-framework",
+        );
+    }
 }
 
 fn add_ts_js_arrow_functions(
@@ -569,7 +628,7 @@ fn extract_python(
         r"^([ \t]*)(async\s+)?def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\([^)]*\)\s*(?:->\s*[^:]+)?\s*:",
     )
     .unwrap();
-    let decorator_re = Regex::new(r"^([ \t]*)@([A-Za-z_][A-Za-z0-9_\.]*)").unwrap();
+    let decorator_re = Regex::new(r"^([ \t]*)@([A-Za-z_][A-Za-z0-9_\.]*(?:\([^)]*\))?)").unwrap();
 
     let mut class_stack: Vec<(usize, String, String)> = Vec::new();
     let mut pending_decorators: Vec<(usize, String, i64)> = Vec::new();
@@ -615,6 +674,24 @@ fn extract_python(
 
         if let Some(cap) = def_re.captures(line) {
             let name = cap[3].to_string();
+            for (_, decorator, decorator_line) in &pending_decorators {
+                if let Some((method, path)) = python_route_decorator(decorator) {
+                    add_framework_route_node(
+                        file_path,
+                        Language::Python,
+                        now,
+                        nodes,
+                        edges,
+                        refs,
+                        method,
+                        path,
+                        Some(&name),
+                        *decorator_line,
+                        Some(format!("@{decorator}")),
+                        "web-framework",
+                    );
+                }
+            }
             let parent_class = class_stack
                 .iter()
                 .rev()
@@ -659,10 +736,11 @@ fn extract_python(
             }
 
             for (_, decorator, decorator_line) in &pending_decorators {
+                let decorator_name = python_decorator_reference_name(decorator);
                 refs_push(
                     refs,
                     &node.id,
-                    decorator,
+                    &decorator_name,
                     EdgeKind::Decorates,
                     file_path,
                     Language::Python,
@@ -687,6 +765,37 @@ fn extract_python(
         refs,
         r"([A-Za-z_][A-Za-z0-9_\.]*)\s*\(",
     );
+}
+
+fn python_route_decorator(decorator: &str) -> Option<(&'static str, &str)> {
+    let open = decorator.find('(')?;
+    let callee = decorator[..open].trim();
+    let args = &decorator[open + 1..];
+    let method = if callee.ends_with(".get") {
+        "GET"
+    } else if callee.ends_with(".post") {
+        "POST"
+    } else if callee.ends_with(".put") {
+        "PUT"
+    } else if callee.ends_with(".patch") {
+        "PATCH"
+    } else if callee.ends_with(".delete") {
+        "DELETE"
+    } else if callee.ends_with(".route") || callee.ends_with(".api_route") {
+        "ROUTE"
+    } else {
+        return None;
+    };
+    first_quoted_arg(args).map(|path| (method, path))
+}
+
+fn python_decorator_reference_name(decorator: &str) -> String {
+    decorator
+        .split('(')
+        .next()
+        .unwrap_or(decorator)
+        .trim()
+        .to_string()
 }
 
 fn extract_python_imports(
@@ -3469,6 +3578,185 @@ fn add_moonbit_route_node(
     nodes.push(node);
 }
 
+fn add_framework_route_node(
+    file_path: &str,
+    language: Language,
+    now: i64,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+    refs: &mut Vec<UnresolvedReference>,
+    method: &str,
+    route_path: &str,
+    handler: Option<&str>,
+    line: i64,
+    signature: Option<String>,
+    provenance: &str,
+) {
+    let route_path = normalize_route_path(route_path);
+    let method = method.to_ascii_uppercase();
+    let name = format!("{method} {route_path}");
+    let mut node = make_node(
+        file_path,
+        language,
+        NodeKind::Route,
+        &name,
+        line,
+        0,
+        now,
+        signature.or_else(|| handler.map(|h| format!("{method} {route_path} -> {h}"))),
+    );
+    node.id = format!("route:{file_path}:{line}:{method}:{route_path}");
+    node.qualified_name = format!("{file_path}::route:{method}:{route_path}");
+    add_contains(nodes, edges, &node);
+    if let Some(edge) = edges.last_mut() {
+        edge.provenance = Some(provenance.to_string());
+    }
+    if let Some(handler) = handler {
+        refs_push(
+            refs,
+            &node.id,
+            handler.trim(),
+            EdgeKind::References,
+            file_path,
+            language,
+            line,
+            0,
+        );
+    }
+    nodes.push(node);
+}
+
+fn extract_web_file_routes(
+    file_path: &str,
+    language: Language,
+    now: i64,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+    refs: &mut Vec<UnresolvedReference>,
+) {
+    if let Some(route_path) = next_app_api_route_path(file_path) {
+        for method in route_exported_methods(nodes) {
+            add_framework_route_node(
+                file_path,
+                language,
+                now,
+                nodes,
+                edges,
+                refs,
+                &method,
+                &route_path,
+                Some(&method),
+                1,
+                Some(format!("{method} {route_path}")),
+                "file-route",
+            );
+        }
+        return;
+    }
+
+    if let Some(route_path) = file_based_page_route_path(file_path) {
+        let handler = default_route_handler(nodes).map(str::to_string);
+        add_framework_route_node(
+            file_path,
+            language,
+            now,
+            nodes,
+            edges,
+            refs,
+            "PAGE",
+            &route_path,
+            handler.as_deref(),
+            1,
+            Some(format!("PAGE {route_path}")),
+            "file-route",
+        );
+    }
+}
+
+fn route_exported_methods(nodes: &[Node]) -> Vec<String> {
+    let mut methods: Vec<String> = nodes
+        .iter()
+        .filter(|node| node.kind == NodeKind::Function && node.is_exported)
+        .filter(|node| {
+            matches!(
+                node.name.as_str(),
+                "GET" | "POST" | "PUT" | "PATCH" | "DELETE"
+            )
+        })
+        .map(|node| node.name.clone())
+        .collect();
+    methods.sort();
+    methods.dedup();
+    methods
+}
+
+fn default_route_handler(nodes: &[Node]) -> Option<&str> {
+    nodes
+        .iter()
+        .find(|node| node.kind == NodeKind::Function && node.name == "default")
+        .map(|node| node.name.as_str())
+}
+
+fn next_app_api_route_path(file_path: &str) -> Option<String> {
+    let path = file_path.strip_prefix("src/").unwrap_or(file_path);
+    let route = path
+        .strip_prefix("app/")
+        .and_then(|p| p.strip_suffix("/route.ts"))
+        .or_else(|| {
+            path.strip_prefix("app/")
+                .and_then(|p| p.strip_suffix("/route.js"))
+        })?;
+    Some(file_route_segments_to_path(route))
+}
+
+fn file_based_page_route_path(file_path: &str) -> Option<String> {
+    let path = file_path.strip_prefix("src/").unwrap_or(file_path);
+    let route = path
+        .strip_prefix("pages/")
+        .and_then(strip_page_extension)
+        .or_else(|| path.strip_prefix("routes/").and_then(strip_page_extension))?;
+    Some(file_route_segments_to_path(route))
+}
+
+fn strip_page_extension(path: &str) -> Option<&str> {
+    for suffix in [".tsx", ".jsx", ".ts", ".js", ".svelte", ".vue"] {
+        if let Some(stripped) = path.strip_suffix(suffix) {
+            return Some(stripped);
+        }
+    }
+    None
+}
+
+fn file_route_segments_to_path(route: &str) -> String {
+    let segments: Vec<String> = route
+        .split('/')
+        .filter(|segment| {
+            !segment.is_empty()
+                && *segment != "page"
+                && *segment != "index"
+                && !(segment.starts_with('(') && segment.ends_with(')'))
+        })
+        .map(|segment| {
+            if segment.starts_with("[...") && segment.ends_with(']') {
+                format!("*{}", &segment[4..segment.len() - 1])
+            } else if segment.starts_with('[') && segment.ends_with(']') {
+                format!(":{}", &segment[1..segment.len() - 1])
+            } else {
+                segment.to_string()
+            }
+        })
+        .collect();
+    normalize_route_path(&segments.join("/"))
+}
+
+fn first_quoted_arg(args: &str) -> Option<&str> {
+    let start_quote = args.find(['"', '\''])?;
+    let quote = args.as_bytes()[start_quote] as char;
+    let rest = &args[start_quote + 1..];
+    let end = rest.find(quote)?;
+    Some(&rest[..end])
+}
+
 fn helper_route_method(helper: &str) -> &'static str {
     match helper {
         "route" | "page" => "PAGE",
@@ -3991,6 +4279,7 @@ fn extract_liquid_vue_svelte(
         Language::Vue | Language::Svelte => {
             extract_component_file(file_path, source, language, now, nodes, edges);
             extract_component_script_symbols(file_path, source, language, now, nodes, edges, refs);
+            extract_web_file_routes(file_path, language, now, nodes, edges, refs);
             match language {
                 Language::Vue => extract_vue_template_components(file_path, source, language, refs),
                 Language::Svelte => extract_svelte_template_refs(file_path, source, language, refs),

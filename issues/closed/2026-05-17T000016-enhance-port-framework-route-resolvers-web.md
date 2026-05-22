@@ -1,6 +1,7 @@
 # Port web framework route resolvers
 
 Created: 2026-05-17
+Completed: 2026-05-22
 Model: GPT-5 Codex
 
 ## 背景
@@ -24,3 +25,10 @@ original は Django、Flask、FastAPI、Express、Laravel、Rails、Spring、Go 
 - Framework route fixture tests
 - `cargo test --all --all-features`
 
+## 解決方法
+
+- TypeScript/JavaScript 抽出で Express 形式の `app/router/server.METHOD(path, ..., handler)` と React Router の `<Route path=...>` から `route` node を作成するようにした。
+- Python 抽出で Flask/FastAPI 形式の `@app.get(...)` などの route decorator から `route` node を作成し、handler 関数への `references` edge 用 unresolved reference を追加した。
+- Next.js App Router API route と `pages/`、SvelteKit/Vue style の file-based page route を deterministic file pattern から route node 化した。
+- 既存の MoonBit Sol route 抽出と Python decorator reference の互換性を保った。
+- `crates/codegraph/tests/original_fixture_parity.rs` に framework route と file-based route の fixture tests を追加し、`cargo test --all --all-features` で確認した。
