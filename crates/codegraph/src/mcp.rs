@@ -153,6 +153,11 @@ impl MCPServer {
                     1,
                     100,
                 ) as usize;
+                let depth = clamp(
+                    args.get("depth").and_then(Value::as_i64).unwrap_or(2),
+                    1,
+                    10,
+                ) as usize;
                 let nodes = find_matching_nodes(&cg, symbol)?;
                 if nodes.is_empty() {
                     return Ok(text_result(format!(
@@ -161,7 +166,7 @@ impl MCPServer {
                 }
                 let mut out = Vec::new();
                 for node in nodes {
-                    out.extend(cg.get_callers(&node.id, 1)?);
+                    out.extend(cg.get_callers(&node.id, depth)?);
                 }
                 Ok(text_result(format_node_edges(
                     &format!("Callers of {symbol}"),
@@ -176,6 +181,11 @@ impl MCPServer {
                     1,
                     100,
                 ) as usize;
+                let depth = clamp(
+                    args.get("depth").and_then(Value::as_i64).unwrap_or(2),
+                    1,
+                    10,
+                ) as usize;
                 let nodes = find_matching_nodes(&cg, symbol)?;
                 if nodes.is_empty() {
                     return Ok(text_result(format!(
@@ -184,7 +194,7 @@ impl MCPServer {
                 }
                 let mut out = Vec::new();
                 for node in nodes {
-                    out.extend(cg.get_callees(&node.id, 1)?);
+                    out.extend(cg.get_callees(&node.id, depth)?);
                 }
                 Ok(text_result(format_node_edges(
                     &format!("Callees of {symbol}"),
@@ -199,6 +209,11 @@ impl MCPServer {
                     1,
                     10,
                 ) as usize;
+                let limit = clamp(
+                    args.get("limit").and_then(Value::as_i64).unwrap_or(50),
+                    1,
+                    200,
+                ) as usize;
                 let nodes = find_matching_nodes(&cg, symbol)?;
                 if nodes.is_empty() {
                     return Ok(text_result(format!(
@@ -208,11 +223,41 @@ impl MCPServer {
                 let mut lines = vec![format!("## Impact: {symbol}")];
                 for node in nodes {
                     let impact = cg.get_impact_radius(&node.id, depth)?;
-                    for n in impact.nodes.values() {
-                        lines.push(format!("- {}", format_node(n)));
+                    let mut impact_nodes = impact.nodes.into_values().collect::<Vec<_>>();
+                    impact_nodes.sort_by(|a, b| {
+                        a.file_path
+                            .cmp(&b.file_path)
+                            .then_with(|| a.start_line.cmp(&b.start_line))
+                            .then_with(|| a.name.cmp(&b.name))
+                    });
+                    for n in impact_nodes.into_iter().take(limit) {
+                        lines.push(format!("- {}", format_node(&n)));
                     }
                 }
                 Ok(text_result(lines.join("\n")))
+            }
+            "codegraph_paths" => {
+                let from = required_str(args, "from")?;
+                let to = required_str(args, "to")?;
+                let depth = clamp(
+                    args.get("depth").and_then(Value::as_i64).unwrap_or(4),
+                    1,
+                    10,
+                ) as usize;
+                let limit = clamp(
+                    args.get("limit").and_then(Value::as_i64).unwrap_or(5),
+                    1,
+                    50,
+                ) as usize;
+                let from_node = find_matching_nodes(&cg, from)?.into_iter().next();
+                let to_node = find_matching_nodes(&cg, to)?.into_iter().next();
+                let (Some(from_node), Some(to_node)) = (from_node, to_node) else {
+                    return Ok(text_result(format!(
+                        "Could not resolve path endpoints: {from} -> {to}"
+                    )));
+                };
+                let paths = cg.find_paths(&from_node.id, &to_node.id, depth, limit)?;
+                Ok(text_result(format_paths(from, to, &paths)))
             }
             "codegraph_node" => {
                 let symbol = required_str(args, "symbol")?;
@@ -319,20 +364,26 @@ fn tools() -> Value {
         tool(
             "codegraph_callers",
             "Find all functions/methods that call a specific symbol.",
-            json!({"symbol": {"type":"string"}, "limit": {"type":"number"}, "projectPath": {"type":"string"}}),
+            json!({"symbol": {"type":"string"}, "depth": {"type":"number"}, "limit": {"type":"number"}, "projectPath": {"type":"string"}}),
             vec!["symbol"]
         ),
         tool(
             "codegraph_callees",
             "Find all functions/methods that a specific symbol calls.",
-            json!({"symbol": {"type":"string"}, "limit": {"type":"number"}, "projectPath": {"type":"string"}}),
+            json!({"symbol": {"type":"string"}, "depth": {"type":"number"}, "limit": {"type":"number"}, "projectPath": {"type":"string"}}),
             vec!["symbol"]
         ),
         tool(
             "codegraph_impact",
             "Analyze the impact radius of changing a symbol.",
-            json!({"symbol": {"type":"string"}, "depth": {"type":"number"}, "projectPath": {"type":"string"}}),
+            json!({"symbol": {"type":"string"}, "depth": {"type":"number"}, "limit": {"type":"number"}, "projectPath": {"type":"string"}}),
             vec!["symbol"]
+        ),
+        tool(
+            "codegraph_paths",
+            "Find bounded dependency/call paths between two symbols.",
+            json!({"from": {"type":"string"}, "to": {"type":"string"}, "depth": {"type":"number"}, "limit": {"type":"number"}, "projectPath": {"type":"string"}}),
+            vec!["from", "to"]
         ),
         tool(
             "codegraph_node",
@@ -469,7 +520,30 @@ fn format_node_edges(title: &str, edges: &[NodeEdge], limit: usize) -> String {
     }
     let mut lines = vec![format!("## {title}")];
     for edge in edges.iter().take(limit) {
-        lines.push(format!("- {}", format_node(&edge.node)));
+        lines.push(format!(
+            "- depth {} {} via {}",
+            edge.depth,
+            format_node(&edge.node),
+            edge.edge.kind
+        ));
+    }
+    lines.join("\n")
+}
+
+fn format_paths(from: &str, to: &str, paths: &[crate::types::GraphPath]) -> String {
+    if paths.is_empty() {
+        return format!("No paths found from {from} to {to}");
+    }
+    let mut lines = vec![format!("## Paths: {from} -> {to}")];
+    for (idx, path) in paths.iter().enumerate() {
+        lines.push(format!("Path {}:", idx + 1));
+        lines.push(
+            path.nodes
+                .iter()
+                .map(format_node)
+                .collect::<Vec<_>>()
+                .join("\n  -> "),
+        );
     }
     lines.join("\n")
 }

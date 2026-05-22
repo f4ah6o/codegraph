@@ -374,4 +374,11 @@ pub struct AffectedMatchSources {
 pub struct NodeEdge {
     pub node: Node,
     pub edge: Edge,
+    pub depth: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GraphPath {
+    pub nodes: Vec<Node>,
+    pub edges: Vec<Edge>,
 }

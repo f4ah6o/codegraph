@@ -16,8 +16,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use types::{
     AffectedDebugEntry, AffectedMatchSources, AffectedReport, ContextFileSummary, ContextMatch,
-    ContextReport, ContextSymbolSummary, FileRecord, GraphStats, IndexResult, Language, Node,
-    NodeEdge, SearchOptions, SearchResult,
+    ContextReport, ContextSymbolSummary, FileRecord, GraphPath, GraphStats, IndexResult, Language,
+    Node, NodeEdge, SearchOptions, SearchResult,
 };
 
 pub const CODEGRAPH_DIR: &str = ".codegraph";
@@ -140,6 +140,16 @@ impl CodeGraph {
 
     pub fn get_impact_radius(&self, node_id: &str, max_depth: usize) -> Result<Subgraph> {
         GraphTraverser::new(&self.db).get_impact_radius(node_id, max_depth)
+    }
+
+    pub fn find_paths(
+        &self,
+        from_node_id: &str,
+        to_node_id: &str,
+        max_depth: usize,
+        max_paths: usize,
+    ) -> Result<Vec<GraphPath>> {
+        GraphTraverser::new(&self.db).find_paths(from_node_id, to_node_id, max_depth, max_paths)
     }
 
     pub fn get_file_dependents(&self, file_path: &str) -> Result<Vec<String>> {

@@ -70,6 +70,51 @@ enum Command {
         #[arg(short, long)]
         json: bool,
     },
+    Callers {
+        symbol: String,
+        #[arg(short, long)]
+        path: Option<PathBuf>,
+        #[arg(short, long, default_value_t = 2)]
+        depth: usize,
+        #[arg(short, long, default_value_t = 20)]
+        limit: usize,
+        #[arg(short, long)]
+        json: bool,
+    },
+    Callees {
+        symbol: String,
+        #[arg(short, long)]
+        path: Option<PathBuf>,
+        #[arg(short, long, default_value_t = 2)]
+        depth: usize,
+        #[arg(short, long, default_value_t = 20)]
+        limit: usize,
+        #[arg(short, long)]
+        json: bool,
+    },
+    Impact {
+        symbol: String,
+        #[arg(short, long)]
+        path: Option<PathBuf>,
+        #[arg(short, long, default_value_t = 2)]
+        depth: usize,
+        #[arg(short, long, default_value_t = 50)]
+        limit: usize,
+        #[arg(short, long)]
+        json: bool,
+    },
+    Paths {
+        from: String,
+        to: String,
+        #[arg(short, long)]
+        path: Option<PathBuf>,
+        #[arg(short, long, default_value_t = 4)]
+        depth: usize,
+        #[arg(short, long, default_value_t = 5)]
+        limit: usize,
+        #[arg(short, long)]
+        json: bool,
+    },
     Serve {
         #[arg(long)]
         mcp: bool,
@@ -236,6 +281,112 @@ fn main() -> Result<()> {
                 }
             }
         }
+        Command::Callers {
+            symbol,
+            path,
+            depth,
+            limit,
+            json,
+        } => {
+            let root = resolve_root(path)?;
+            let cg = CodeGraph::open(root)?;
+            let nodes = find_cli_nodes(&cg, &symbol)?;
+            let mut out = Vec::new();
+            for node in nodes {
+                out.extend(cg.get_callers(&node.id, depth.min(10))?);
+            }
+            out.truncate(limit.min(200));
+            if json {
+                println!("{}", serde_json::to_string_pretty(&out)?);
+            } else {
+                print_node_edges(&format!("Callers of {symbol}"), &out);
+            }
+        }
+        Command::Callees {
+            symbol,
+            path,
+            depth,
+            limit,
+            json,
+        } => {
+            let root = resolve_root(path)?;
+            let cg = CodeGraph::open(root)?;
+            let nodes = find_cli_nodes(&cg, &symbol)?;
+            let mut out = Vec::new();
+            for node in nodes {
+                out.extend(cg.get_callees(&node.id, depth.min(10))?);
+            }
+            out.truncate(limit.min(200));
+            if json {
+                println!("{}", serde_json::to_string_pretty(&out)?);
+            } else {
+                print_node_edges(&format!("Callees of {symbol}"), &out);
+            }
+        }
+        Command::Impact {
+            symbol,
+            path,
+            depth,
+            limit,
+            json,
+        } => {
+            let root = resolve_root(path)?;
+            let cg = CodeGraph::open(root)?;
+            let nodes = find_cli_nodes(&cg, &symbol)?;
+            let mut impacts = Vec::new();
+            for node in nodes {
+                impacts.push(cg.get_impact_radius(&node.id, depth.min(10))?);
+            }
+            if json {
+                println!("{}", serde_json::to_string_pretty(&impacts)?);
+            } else {
+                println!("Impact of {symbol}");
+                let mut printed = 0usize;
+                for impact in impacts {
+                    let mut nodes = impact.nodes.into_values().collect::<Vec<_>>();
+                    nodes.sort_by(|a, b| {
+                        a.file_path
+                            .cmp(&b.file_path)
+                            .then_with(|| a.start_line.cmp(&b.start_line))
+                            .then_with(|| a.name.cmp(&b.name))
+                    });
+                    for node in nodes {
+                        if printed >= limit.min(200) {
+                            return Ok(());
+                        }
+                        println!("- {}", format_cli_node(&node));
+                        printed += 1;
+                    }
+                }
+            }
+        }
+        Command::Paths {
+            from,
+            to,
+            path,
+            depth,
+            limit,
+            json,
+        } => {
+            let root = resolve_root(path)?;
+            let cg = CodeGraph::open(root)?;
+            let from_node = find_cli_nodes(&cg, &from)?.into_iter().next();
+            let to_node = find_cli_nodes(&cg, &to)?.into_iter().next();
+            let (Some(from_node), Some(to_node)) = (from_node, to_node) else {
+                return Err(anyhow!("Could not resolve both path endpoints"));
+            };
+            let paths = cg.find_paths(&from_node.id, &to_node.id, depth.min(10), limit.min(50))?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&paths)?);
+            } else if paths.is_empty() {
+                println!("No paths found from {from} to {to}");
+            } else {
+                for (idx, path) in paths.iter().enumerate() {
+                    println!("Path {}:", idx + 1);
+                    println!("{}", format_path(path));
+                }
+            }
+        }
         Command::Serve { mcp, path } => {
             if mcp {
                 let mut server = codegraph::mcp::MCPServer::new(path);
@@ -258,6 +409,51 @@ fn main() -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn find_cli_nodes(cg: &CodeGraph, symbol: &str) -> Result<Vec<codegraph::types::Node>> {
+    Ok(cg
+        .search_nodes(
+            symbol,
+            SearchOptions {
+                limit: 20,
+                ..Default::default()
+            },
+        )?
+        .into_iter()
+        .map(|r| r.node)
+        .collect())
+}
+
+fn print_node_edges(title: &str, edges: &[codegraph::types::NodeEdge]) {
+    if edges.is_empty() {
+        println!("No results found for {title}");
+        return;
+    }
+    println!("{title}");
+    for edge in edges {
+        println!(
+            "- depth {} {} via {}",
+            edge.depth,
+            format_cli_node(&edge.node),
+            edge.edge.kind
+        );
+    }
+}
+
+fn format_cli_node(node: &codegraph::types::Node) -> String {
+    format!(
+        "{} {} {}:{}",
+        node.kind, node.name, node.file_path, node.start_line
+    )
+}
+
+fn format_path(path: &codegraph::types::GraphPath) -> String {
+    path.nodes
+        .iter()
+        .map(format_cli_node)
+        .collect::<Vec<_>>()
+        .join("\n  -> ")
 }
 
 fn resolve_root(path: Option<PathBuf>) -> Result<PathBuf> {
