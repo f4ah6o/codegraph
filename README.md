@@ -30,6 +30,33 @@ workspace; the original TypeScript CodeGraph code is tracked separately on the
 keeps the upstream project's ideas and history in view while evolving the tool
 as a local-first Rust CLI and library.
 
+## Supported Languages and Frameworks
+
+`cgz` detects and indexes source files for these languages and file formats:
+
+| Area | Support |
+|---|---|
+| TypeScript / JavaScript | `.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.cjs` |
+| Python | `.py`, `.pyw` |
+| Go | `.go` |
+| Rust | `.rs` |
+| Java / Kotlin | `.java`, `.kt`, `.kts` |
+| C / C++ | `.c`, `.h`, `.cpp`, `.cc`, `.cxx`, `.hpp`, `.hxx` |
+| C# | `.cs` |
+| PHP / Ruby | `.php`, `.rb`, `.rake` |
+| Swift | `.swift` |
+| Dart | `.dart` |
+| Pascal | `.pas`, `.dpr`, `.dpk`, `.lpr`, `.dfm`, `.fmx` |
+| Scala | `.scala`, `.sc` |
+| MoonBit | `.mbt`, `.mbti`, `.mbt.md`, `moon.mod.json`, `moon.pkg.json`, `moon.pkg` |
+| Liquid / Vue / Svelte | `.liquid`, `.vue`, `.svelte` |
+
+Framework-aware indexing currently includes MoonBit Sol route extraction,
+Liquid render/include/section references, and Vue/Svelte component and template
+references. Web framework route resolvers from the upstream TypeScript project
+are being ported intentionally; see
+[docs/PORT_PARITY_MATRIX.md](./docs/PORT_PARITY_MATRIX.md) for current parity.
+
 ## What cgz Stores
 
 `cgz init` creates `.codegraph/` in the target project. The database file is
