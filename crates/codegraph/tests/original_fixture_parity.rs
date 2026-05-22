@@ -1,7 +1,15 @@
 mod support;
 
+use codegraph::extraction::registered_extractor_name;
 use codegraph::types::{EdgeKind, Language, NodeKind, SearchOptions};
 use support::{OriginalFixtureProject, OriginalSourceFixture};
+
+#[test]
+fn harness_can_assert_extractor_registry_dispatch() {
+    assert_eq!(registered_extractor_name(Language::Rust), "rust");
+    assert_eq!(registered_extractor_name(Language::MoonBit), "moonbit");
+    assert_eq!(registered_extractor_name(Language::TypeScript), "generic");
+}
 
 #[test]
 fn harness_extracts_original_style_typescript_symbols() {
@@ -29,7 +37,11 @@ export class PaymentService {
     fixture.assert_node(NodeKind::Class, "PaymentService");
     fixture.assert_reference(EdgeKind::Calls, "stripe.charge");
     assert!(
-        fixture.result().edges.iter().any(|edge| edge.kind == EdgeKind::Contains),
+        fixture
+            .result()
+            .edges
+            .iter()
+            .any(|edge| edge.kind == EdgeKind::Contains),
         "fixture should expose containment edges for shared assertions"
     );
 }

@@ -4,6 +4,67 @@ use regex::Regex;
 use std::path::Path;
 use tree_sitter::{Node as SyntaxNode, Parser};
 
+type ExtractorFn = fn(
+    file_path: &str,
+    source: &str,
+    language: Language,
+    now: i64,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+    refs: &mut Vec<UnresolvedReference>,
+);
+
+#[derive(Clone, Copy)]
+struct LanguageExtractor {
+    name: &'static str,
+    languages: &'static [Language],
+    extract: ExtractorFn,
+}
+
+const RUST_LANGUAGES: &[Language] = &[Language::Rust];
+const MOONBIT_LANGUAGES: &[Language] = &[Language::MoonBit];
+const GENERIC_LANGUAGES: &[Language] = &[
+    Language::TypeScript,
+    Language::Tsx,
+    Language::JavaScript,
+    Language::Jsx,
+    Language::Python,
+    Language::Go,
+    Language::Java,
+    Language::C,
+    Language::Cpp,
+    Language::CSharp,
+    Language::Php,
+    Language::Ruby,
+    Language::Swift,
+    Language::Kotlin,
+    Language::Dart,
+    Language::Svelte,
+    Language::Vue,
+    Language::Liquid,
+    Language::Pascal,
+    Language::Scala,
+    Language::Unknown,
+];
+
+const LANGUAGE_EXTRACTORS: &[LanguageExtractor] = &[
+    LanguageExtractor {
+        name: "rust",
+        languages: RUST_LANGUAGES,
+        extract: extract_rust_entry,
+    },
+    LanguageExtractor {
+        name: "moonbit",
+        languages: MOONBIT_LANGUAGES,
+        extract: extract_moonbit_entry,
+    },
+    LanguageExtractor {
+        name: "generic",
+        languages: GENERIC_LANGUAGES,
+        extract: extract_generic_entry,
+    },
+];
+
 pub fn should_include_file(path: &Path, config: &CodeGraphConfig) -> bool {
     let s = path.to_string_lossy().replace('\\', "/");
     if s.starts_with(".codegraph/") {
@@ -107,21 +168,68 @@ pub fn extract_from_source(path: &Path, source: &str, language: Language) -> Ext
     let mut edges = Vec::new();
     let mut refs = Vec::new();
 
-    match language {
-        Language::Rust => extract_rust(&file_path, source, now, &mut nodes, &mut edges, &mut refs),
-        Language::MoonBit => {
-            extract_moonbit(&file_path, source, now, &mut nodes, &mut edges, &mut refs)
-        }
-        _ => extract_generic(
-            &file_path, source, language, now, &mut nodes, &mut edges, &mut refs,
-        ),
-    }
+    let extractor = extractor_for_language(language);
+    (extractor.extract)(
+        &file_path, &source, language, now, &mut nodes, &mut edges, &mut refs,
+    );
 
     ExtractionResult {
         nodes,
         edges,
         unresolved_references: refs,
     }
+}
+
+pub fn registered_extractor_name(language: Language) -> &'static str {
+    extractor_for_language(language).name
+}
+
+fn extractor_for_language(language: Language) -> LanguageExtractor {
+    LANGUAGE_EXTRACTORS
+        .iter()
+        .copied()
+        .find(|extractor| extractor.languages.contains(&language))
+        .unwrap_or(LanguageExtractor {
+            name: "generic",
+            languages: &[],
+            extract: extract_generic_entry,
+        })
+}
+
+fn extract_rust_entry(
+    file_path: &str,
+    source: &str,
+    _language: Language,
+    now: i64,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+    refs: &mut Vec<UnresolvedReference>,
+) {
+    extract_rust(file_path, source, now, nodes, edges, refs);
+}
+
+fn extract_moonbit_entry(
+    file_path: &str,
+    source: &str,
+    _language: Language,
+    now: i64,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+    refs: &mut Vec<UnresolvedReference>,
+) {
+    extract_moonbit(file_path, source, now, nodes, edges, refs);
+}
+
+fn extract_generic_entry(
+    file_path: &str,
+    source: &str,
+    language: Language,
+    now: i64,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+    refs: &mut Vec<UnresolvedReference>,
+) {
+    extract_generic(file_path, source, language, now, nodes, edges, refs);
 }
 
 fn extract_rust(

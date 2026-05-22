@@ -96,7 +96,8 @@ impl OriginalSourceFixture {
             self.result
                 .unresolved_references
                 .iter()
-                .any(|reference| reference.reference_kind == kind && reference.reference_name == name),
+                .any(|reference| reference.reference_kind == kind
+                    && reference.reference_name == name),
             "missing {kind:?} reference {name:?} in {}: {:?}",
             self.path.display(),
             self.result

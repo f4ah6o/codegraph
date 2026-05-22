@@ -1,6 +1,7 @@
 # Improve language extractor registry
 
 Created: 2026-05-17
+Completed: 2026-05-22
 Model: GPT-5 Codex
 
 ## 背景
@@ -24,3 +25,16 @@ Model: GPT-5 Codex
 - `cargo test --all --all-features`
 - 既存 MoonBit/Rust extraction tests が変更前と同じ期待値を満たす
 
+## 解決方法
+
+`crates/codegraph/src/extraction.rs` に `LanguageExtractor` registry を追加し、
+language から named extractor (`rust`, `moonbit`, `generic`) を引ける dispatch に
+整理した。既存の Rust / MoonBit / generic extractor 本体はそのまま利用し、
+後続の language-specific port では registry に entry を追加するだけで dispatch
+を拡張できる形にした。
+
+`registered_extractor_name` を追加し、test harness から Rust、MoonBit、TypeScript
+の dispatch を検証できるようにした。TypeScript は現時点では generic extractor
+に送られ、詳細な TypeScript/JavaScript port は別 issue の対象として残している。
+
+`docs/PORT_PARITY_MATRIX.md` の extractor registry 行も Done に更新した。
