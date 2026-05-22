@@ -31,20 +31,15 @@ const PHP_RUBY_LANGUAGES: &[Language] = &[Language::Php, Language::Ruby];
 const SWIFT_LANGUAGES: &[Language] = &[Language::Swift];
 const DART_PASCAL_SCALA_LANGUAGES: &[Language] =
     &[Language::Dart, Language::Pascal, Language::Scala];
+const LIQUID_VUE_SVELTE_LANGUAGES: &[Language] =
+    &[Language::Liquid, Language::Vue, Language::Svelte];
 const TYPESCRIPT_JAVASCRIPT_LANGUAGES: &[Language] = &[
     Language::TypeScript,
     Language::Tsx,
     Language::JavaScript,
     Language::Jsx,
 ];
-const GENERIC_LANGUAGES: &[Language] = &[
-    Language::C,
-    Language::Cpp,
-    Language::Svelte,
-    Language::Vue,
-    Language::Liquid,
-    Language::Unknown,
-];
+const GENERIC_LANGUAGES: &[Language] = &[Language::C, Language::Cpp, Language::Unknown];
 
 const LANGUAGE_EXTRACTORS: &[LanguageExtractor] = &[
     LanguageExtractor {
@@ -96,6 +91,11 @@ const LANGUAGE_EXTRACTORS: &[LanguageExtractor] = &[
         name: "dart_pascal_scala",
         languages: DART_PASCAL_SCALA_LANGUAGES,
         extract: extract_dart_pascal_scala_entry,
+    },
+    LanguageExtractor {
+        name: "liquid_vue_svelte",
+        languages: LIQUID_VUE_SVELTE_LANGUAGES,
+        extract: extract_liquid_vue_svelte_entry,
     },
     LanguageExtractor {
         name: "generic",
@@ -353,6 +353,18 @@ fn extract_dart_pascal_scala_entry(
     refs: &mut Vec<UnresolvedReference>,
 ) {
     extract_dart_pascal_scala(file_path, source, language, now, nodes, edges, refs);
+}
+
+fn extract_liquid_vue_svelte_entry(
+    file_path: &str,
+    source: &str,
+    language: Language,
+    now: i64,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+    refs: &mut Vec<UnresolvedReference>,
+) {
+    extract_liquid_vue_svelte(file_path, source, language, now, nodes, edges, refs);
 }
 
 fn extract_generic_entry(
@@ -3962,6 +3974,313 @@ fn collect_moonbit_refs(
 
     for child in named_children(node) {
         collect_moonbit_refs(file_path, source, child, nodes, refs);
+    }
+}
+
+fn extract_liquid_vue_svelte(
+    file_path: &str,
+    source: &str,
+    language: Language,
+    now: i64,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+    refs: &mut Vec<UnresolvedReference>,
+) {
+    match language {
+        Language::Liquid => extract_liquid(file_path, source, now, nodes, edges, refs),
+        Language::Vue | Language::Svelte => {
+            extract_component_file(file_path, source, language, now, nodes, edges);
+            extract_component_script_symbols(file_path, source, language, now, nodes, edges, refs);
+            match language {
+                Language::Vue => extract_vue_template_components(file_path, source, language, refs),
+                Language::Svelte => extract_svelte_template_refs(file_path, source, language, refs),
+                _ => {}
+            }
+        }
+        _ => {}
+    }
+}
+
+fn extract_liquid(
+    file_path: &str,
+    source: &str,
+    now: i64,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+    refs: &mut Vec<UnresolvedReference>,
+) {
+    let snippet_re = Regex::new(r#"\{%-?\s*(render|include)\s+['"]([^'"]+)['"]"#).unwrap();
+    for cap in snippet_re.captures_iter(source) {
+        let full = cap.get(0).unwrap();
+        let tag = cap.get(1).unwrap().as_str();
+        let name = cap.get(2).unwrap();
+        let line = line_for(source, full.start());
+        add_liquid_reference_node(
+            file_path,
+            now,
+            nodes,
+            edges,
+            refs,
+            name.as_str(),
+            &format!("{}:{}", tag, name.as_str()),
+            &format!("snippets/{}.liquid", name.as_str()),
+            line,
+            full.as_str(),
+        );
+    }
+
+    let section_re = Regex::new(r#"\{%-?\s*section\s+['"]([^'"]+)['"]"#).unwrap();
+    for cap in section_re.captures_iter(source) {
+        let full = cap.get(0).unwrap();
+        let name = cap.get(1).unwrap();
+        let line = line_for(source, full.start());
+        add_liquid_reference_node(
+            file_path,
+            now,
+            nodes,
+            edges,
+            refs,
+            name.as_str(),
+            &format!("section:{}", name.as_str()),
+            &format!("sections/{}.liquid", name.as_str()),
+            line,
+            full.as_str(),
+        );
+    }
+
+    let schema_re =
+        Regex::new(r"(?s)\{%-?\s*schema\s*-?%\}(.*?)\{%-?\s*endschema\s*-?%\}").unwrap();
+    for cap in schema_re.captures_iter(source) {
+        let full = cap.get(0).unwrap();
+        let body = cap.get(1).map(|m| m.as_str()).unwrap_or_default();
+        let line = line_for(source, full.start());
+        let mut node = make_node(
+            file_path,
+            Language::Liquid,
+            NodeKind::Constant,
+            "schema",
+            line,
+            0,
+            now,
+            Some(
+                full.as_str()
+                    .lines()
+                    .next()
+                    .unwrap_or("{% schema %}")
+                    .trim()
+                    .to_string(),
+            ),
+        );
+        node.qualified_name = format!("{}::schema", file_path);
+        node.docstring = Some(body.trim().chars().take(200).collect());
+        add_contains(nodes, edges, &node);
+        nodes.push(node);
+    }
+
+    let assign_re = Regex::new(r"\{%-?\s*assign\s+([A-Za-z_][A-Za-z0-9_]*)\s*=").unwrap();
+    for cap in assign_re.captures_iter(source) {
+        let full = cap.get(0).unwrap();
+        let name = cap.get(1).unwrap();
+        let mut node = make_node(
+            file_path,
+            Language::Liquid,
+            NodeKind::Variable,
+            name.as_str(),
+            line_for(source, name.start()),
+            0,
+            now,
+            Some(full.as_str().trim().to_string()),
+        );
+        node.qualified_name = format!("{}::{}", file_path, name.as_str());
+        add_contains(nodes, edges, &node);
+        nodes.push(node);
+    }
+}
+
+fn add_liquid_reference_node(
+    file_path: &str,
+    now: i64,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+    refs: &mut Vec<UnresolvedReference>,
+    name: &str,
+    qualified_suffix: &str,
+    reference_name: &str,
+    line: i64,
+    signature: &str,
+) {
+    let import_node = make_node(
+        file_path,
+        Language::Liquid,
+        NodeKind::Import,
+        name,
+        line,
+        0,
+        now,
+        Some(signature.trim().to_string()),
+    );
+    add_contains(nodes, edges, &import_node);
+    nodes.push(import_node);
+
+    let mut component_node = make_node(
+        file_path,
+        Language::Liquid,
+        NodeKind::Component,
+        name,
+        line,
+        0,
+        now,
+        Some(signature.trim().to_string()),
+    );
+    component_node.qualified_name = format!("{}::{}", file_path, qualified_suffix);
+    add_contains(nodes, edges, &component_node);
+    nodes.push(component_node);
+
+    refs.push(unresolved(
+        &nodes[0].id,
+        reference_name,
+        EdgeKind::References,
+        file_path,
+        Language::Liquid,
+        line,
+    ));
+}
+
+fn extract_component_file(
+    file_path: &str,
+    source: &str,
+    language: Language,
+    now: i64,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+) {
+    let name = component_name_from_path(file_path, language);
+    let mut node = make_node(
+        file_path,
+        language,
+        NodeKind::Component,
+        &name,
+        1,
+        0,
+        now,
+        None,
+    );
+    node.qualified_name = format!("{}::{}", file_path, name);
+    node.end_line = source.lines().count().max(1) as i64;
+    node.is_exported = true;
+    node.visibility = Some("public".to_string());
+    add_contains(nodes, edges, &node);
+    nodes.push(node);
+}
+
+fn component_name_from_path(file_path: &str, language: Language) -> String {
+    let file_name = file_path.rsplit('/').next().unwrap_or(file_path);
+    match language {
+        Language::Vue => file_name.strip_suffix(".vue").unwrap_or(file_name),
+        Language::Svelte => file_name.strip_suffix(".svelte").unwrap_or(file_name),
+        _ => file_name,
+    }
+    .to_string()
+}
+
+fn extract_component_script_symbols(
+    file_path: &str,
+    source: &str,
+    language: Language,
+    now: i64,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+    refs: &mut Vec<UnresolvedReference>,
+) {
+    for block in script_blocks(source) {
+        let before_nodes = nodes.len();
+        let before_refs = refs.len();
+        extract_typescript_javascript(file_path, &block.content, language, now, nodes, edges, refs);
+        for node in nodes.iter_mut().skip(before_nodes) {
+            node.start_line += block.start_line - 1;
+            node.end_line += block.start_line - 1;
+        }
+        for reference in refs.iter_mut().skip(before_refs) {
+            reference.line += block.start_line - 1;
+        }
+    }
+}
+
+struct ScriptBlock {
+    content: String,
+    start_line: i64,
+}
+
+fn script_blocks(source: &str) -> Vec<ScriptBlock> {
+    let re = Regex::new(r"(?is)<script(?:\s[^>]*)?>(.*?)</script>").unwrap();
+    re.captures_iter(source)
+        .filter_map(|cap| {
+            let content = cap.get(1)?;
+            Some(ScriptBlock {
+                content: content.as_str().to_string(),
+                start_line: line_for(source, content.start()),
+            })
+        })
+        .collect()
+}
+
+fn extract_vue_template_components(
+    file_path: &str,
+    source: &str,
+    language: Language,
+    refs: &mut Vec<UnresolvedReference>,
+) {
+    let tag_re = Regex::new(r"<([A-Z][A-Za-z0-9_$]*)\b").unwrap();
+    for cap in tag_re.captures_iter(source) {
+        let tag = cap.get(1).unwrap();
+        refs.push(unresolved(
+            &format!("file:{}", file_path),
+            tag.as_str(),
+            EdgeKind::References,
+            file_path,
+            language,
+            line_for(source, tag.start()),
+        ));
+    }
+}
+
+fn extract_svelte_template_refs(
+    file_path: &str,
+    source: &str,
+    language: Language,
+    refs: &mut Vec<UnresolvedReference>,
+) {
+    extract_vue_template_components(file_path, source, language, refs);
+    let expr_re = Regex::new(r"\{([^}#/:@][^}]*)\}").unwrap();
+    let call_re = Regex::new(r"\b([A-Za-z_$][A-Za-z0-9_$.]*)\s*\(").unwrap();
+    let runes = [
+        "$props",
+        "$state",
+        "$derived",
+        "$effect",
+        "$bindable",
+        "$inspect",
+        "$host",
+        "$snippet",
+    ];
+    for expr in expr_re.captures_iter(source) {
+        let Some(body) = expr.get(1) else {
+            continue;
+        };
+        for call in call_re.captures_iter(body.as_str()) {
+            let name = call.get(1).unwrap().as_str();
+            if runes.contains(&name) || matches!(name, "if" | "else" | "each" | "await") {
+                continue;
+            }
+            refs.push(unresolved(
+                &format!("file:{}", file_path),
+                name,
+                EdgeKind::Calls,
+                file_path,
+                language,
+                line_for(source, body.start() + call.get(1).unwrap().start()),
+            ));
+        }
     }
 }
 

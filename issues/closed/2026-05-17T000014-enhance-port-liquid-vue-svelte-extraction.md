@@ -1,6 +1,7 @@
 # Port Liquid Vue and Svelte extraction
 
 Created: 2026-05-17
+Completed: 2026-05-22
 Model: GPT-5 Codex
 
 ## 背景
@@ -24,3 +25,10 @@ original は Liquid、Vue、Svelte の template/component 抽出を持つ。fron
 - Liquid/Vue/Svelte fixture tests
 - `cargo test --all --all-features`
 
+## 解決方法
+
+- Liquid/Vue/Svelte 専用 extractor を registry に追加し、generic extraction から分離した。
+- Liquid の render/include/section を import/component nodes と references として抽出し、schema block と assign も抽出した。
+- Vue/Svelte の file-level component node と script block 内の import/function/type/class symbols を抽出した。
+- Vue/Svelte template 内の PascalCase component references と、Svelte template expression calls を抽出した。
+- Liquid/Vue/Svelte fixture tests を追加し、`cargo test --all --all-features` で確認した。

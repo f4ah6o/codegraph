@@ -36,6 +36,18 @@ fn harness_can_assert_extractor_registry_dispatch() {
         registered_extractor_name(Language::Scala),
         "dart_pascal_scala"
     );
+    assert_eq!(
+        registered_extractor_name(Language::Liquid),
+        "liquid_vue_svelte"
+    );
+    assert_eq!(
+        registered_extractor_name(Language::Vue),
+        "liquid_vue_svelte"
+    );
+    assert_eq!(
+        registered_extractor_name(Language::Svelte),
+        "liquid_vue_svelte"
+    );
 }
 
 #[test]
@@ -731,6 +743,103 @@ type Handler = String => String
     fixture.assert_reference(EdgeKind::Implements, "Routable");
     fixture.assert_reference(EdgeKind::Calls, "Future.successful");
     fixture.assert_reference(EdgeKind::Calls, "renderPayment");
+}
+
+#[test]
+fn harness_extracts_liquid_template_references_schema_and_assignments() {
+    let fixture = OriginalSourceFixture::new(
+        "templates/product.liquid",
+        r#"
+{% assign product_title = product.title %}
+{% render 'price-card', product: product %}
+{% include "promo-banner" %}
+{% section 'featured-products' %}
+
+{% schema %}
+{ "name": "Product template" }
+{% endschema %}
+"#,
+    );
+
+    assert_eq!(fixture.language(), Language::Liquid);
+    fixture.assert_node(NodeKind::Variable, "product_title");
+    fixture.assert_node(NodeKind::Import, "price-card");
+    fixture.assert_node(NodeKind::Import, "promo-banner");
+    fixture.assert_node(NodeKind::Import, "featured-products");
+    fixture.assert_node(NodeKind::Component, "price-card");
+    fixture.assert_node(NodeKind::Component, "featured-products");
+    fixture.assert_node(NodeKind::Constant, "schema");
+    fixture.assert_reference(EdgeKind::References, "snippets/price-card.liquid");
+    fixture.assert_reference(EdgeKind::References, "snippets/promo-banner.liquid");
+    fixture.assert_reference(EdgeKind::References, "sections/featured-products.liquid");
+}
+
+#[test]
+fn harness_extracts_vue_component_script_symbols_and_template_refs() {
+    let fixture = OriginalSourceFixture::new(
+        "src/components/PaymentPanel.vue",
+        r#"
+<template>
+  <PaymentSummary :total="total" />
+</template>
+
+<script setup lang="ts">
+import PaymentSummary from './PaymentSummary.vue';
+
+export const total = () => calculateTotal();
+
+function calculateTotal(): number {
+  return 42;
+}
+</script>
+"#,
+    );
+
+    assert_eq!(fixture.language(), Language::Vue);
+    fixture.assert_exported_node(NodeKind::Component, "PaymentPanel");
+    fixture.assert_node(NodeKind::Import, "./PaymentSummary.vue");
+    fixture.assert_exported_node(NodeKind::Function, "total");
+    fixture.assert_node(NodeKind::Function, "calculateTotal");
+    fixture.assert_reference(EdgeKind::Imports, "./PaymentSummary.vue");
+    fixture.assert_reference(EdgeKind::References, "PaymentSummary");
+    fixture.assert_reference(EdgeKind::Calls, "calculateTotal");
+}
+
+#[test]
+fn harness_extracts_svelte_component_script_symbols_template_calls_and_components() {
+    let fixture = OriginalSourceFixture::new(
+        "src/routes/Checkout.svelte",
+        r#"
+<script lang="ts">
+import CartSummary from './CartSummary.svelte';
+
+export function submitPayment() {
+  return completeCheckout();
+}
+</script>
+
+<CartSummary />
+<button class={buttonVariants({ size: 'sm' })} on:click={submitPayment}>Pay</button>
+<p>{$state('ignored-rune')}</p>
+"#,
+    );
+
+    assert_eq!(fixture.language(), Language::Svelte);
+    fixture.assert_exported_node(NodeKind::Component, "Checkout");
+    fixture.assert_node(NodeKind::Import, "./CartSummary.svelte");
+    fixture.assert_exported_node(NodeKind::Function, "submitPayment");
+    fixture.assert_reference(EdgeKind::Imports, "./CartSummary.svelte");
+    fixture.assert_reference(EdgeKind::References, "CartSummary");
+    fixture.assert_reference(EdgeKind::Calls, "completeCheckout");
+    fixture.assert_reference(EdgeKind::Calls, "buttonVariants");
+    assert!(
+        !fixture
+            .result()
+            .unresolved_references
+            .iter()
+            .any(|reference| reference.reference_name == "$state"),
+        "Svelte rune calls should not be captured as unresolved references"
+    );
 }
 
 #[test]
