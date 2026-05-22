@@ -1,6 +1,7 @@
 # Port core import resolution
 
 Created: 2026-05-17
+Completed: 2026-05-22
 Model: GPT-5 Codex
 
 ## 背景
@@ -24,3 +25,10 @@ original は import resolver、name matcher、path aliases を持ち、unresolve
 - Cross-file import fixture tests
 - `cargo test --all --all-features`
 
+## 解決方法
+
+- unresolved refs の解決を name-only から path-first resolver に拡張した。
+- relative imports と language-specific extension/index conventions を indexed file nodes に解決するようにした。
+- `tsconfig.json` / `jsconfig.json` の `compilerOptions.paths` を JSONC tolerant に読み取り、alias imports を indexed files に解決するようにした。
+- name fallback は同ランク候補が複数ある場合に edge を作らないようにし、曖昧な誤解決を避けるようにした。
+- relative import と tsconfig path alias の cross-file fixture tests を追加し、`cargo test --all --all-features` で確認した。

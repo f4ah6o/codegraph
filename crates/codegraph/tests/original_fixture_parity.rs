@@ -854,6 +854,75 @@ fn harness_extracts_import_fixture_references() {
 }
 
 #[test]
+fn harness_resolves_relative_imports_to_indexed_files() {
+    let project = OriginalFixtureProject::new(&[
+        (
+            "src/payment.ts",
+            r#"
+import { charge } from './stripe';
+
+export function processPayment() {
+  return charge();
+}
+"#,
+        ),
+        (
+            "src/stripe.ts",
+            r#"
+export function charge() {
+  return true;
+}
+"#,
+        ),
+    ]);
+
+    let cg = project.index();
+    let dependents = cg.get_file_dependents("src/stripe.ts").unwrap();
+    assert_eq!(dependents, vec!["src/payment.ts"]);
+}
+
+#[test]
+fn harness_resolves_tsconfig_path_alias_imports_to_indexed_files() {
+    let project = OriginalFixtureProject::new(&[
+        (
+            "tsconfig.json",
+            r#"
+{
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@lib/*": ["src/lib/*"]
+    }
+  }
+}
+"#,
+        ),
+        (
+            "src/app.ts",
+            r#"
+import { formatReceipt } from '@lib/receipt';
+
+export function render() {
+  return formatReceipt();
+}
+"#,
+        ),
+        (
+            "src/lib/receipt.ts",
+            r#"
+export function formatReceipt() {
+  return 'ok';
+}
+"#,
+        ),
+    ]);
+
+    let cg = project.index();
+    let dependents = cg.get_file_dependents("src/lib/receipt.ts").unwrap();
+    assert_eq!(dependents, vec!["src/app.ts"]);
+}
+
+#[test]
 fn harness_indexes_project_and_queries_fixture_nodes() {
     let project = OriginalFixtureProject::new(&[(
         "src/cache.rs",

@@ -1,6 +1,9 @@
 use crate::types::*;
 use anyhow::{Context, Result};
+use regex::Regex;
 use rusqlite::{params, Connection, OptionalExtension};
+use serde_json::Value;
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
@@ -198,8 +201,10 @@ impl Database {
         Ok(())
     }
 
-    pub fn resolve_references_by_name(&self) -> Result<()> {
-        let mut refs = self.conn.prepare("SELECT from_node_id, reference_name, reference_kind, line, col, language FROM unresolved_refs")?;
+    pub fn resolve_references(&self, project_root: &Path) -> Result<()> {
+        let indexed_files = self.indexed_file_set()?;
+        let aliases = load_project_aliases(project_root).unwrap_or_default();
+        let mut refs = self.conn.prepare("SELECT from_node_id, reference_name, reference_kind, line, col, file_path, language FROM unresolved_refs")?;
         let rows = refs.query_map([], |row| {
             Ok((
                 row.get::<_, String>(0)?,
@@ -208,23 +213,103 @@ impl Database {
                 row.get::<_, Option<i64>>(3)?,
                 row.get::<_, Option<i64>>(4)?,
                 row.get::<_, String>(5)?,
+                row.get::<_, String>(6)?,
             ))
         })?;
         for row in rows {
-            let (from, name, kind, line, col, lang) = row?;
-            let target: Option<String> = self.conn.query_row(
-                "SELECT id FROM nodes WHERE name = ?1 AND language = ?2 AND id != ?3 ORDER BY CASE kind WHEN 'function' THEN 0 WHEN 'method' THEN 1 WHEN 'struct' THEN 2 WHEN 'trait' THEN 3 ELSE 9 END LIMIT 1",
-                params![name, lang, from],
-                |row| row.get(0),
-            ).optional()?;
+            let (from, name, kind, line, col, file_path, lang) = row?;
+            let language = Language::from_str(&lang).unwrap_or(Language::Unknown);
+            let mut target =
+                self.resolve_reference_path(&name, &file_path, language, &indexed_files, &aliases)?;
+            if target.is_none() {
+                target = self.resolve_reference_by_name(&from, &name, &lang)?;
+            }
             if let Some(target) = target {
                 self.conn.execute(
-                    "INSERT INTO edges (source, target, kind, line, col, provenance) VALUES (?1, ?2, ?3, ?4, ?5, 'heuristic')",
+                    "INSERT INTO edges (source, target, kind, line, col, provenance) VALUES (?1, ?2, ?3, ?4, ?5, 'resolver')",
                     params![from, target, kind, line, col],
                 )?;
             }
         }
         Ok(())
+    }
+
+    pub fn resolve_references_by_name(&self) -> Result<()> {
+        self.resolve_references(Path::new("."))
+    }
+
+    fn indexed_file_set(&self) -> Result<BTreeSet<String>> {
+        let mut stmt = self.conn.prepare("SELECT path FROM files")?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        let mut out = BTreeSet::new();
+        for row in rows {
+            out.insert(normalize_path(&row?));
+        }
+        Ok(out)
+    }
+
+    fn resolve_reference_path(
+        &self,
+        reference_name: &str,
+        from_file: &str,
+        language: Language,
+        indexed_files: &BTreeSet<String>,
+        aliases: &[PathAlias],
+    ) -> Result<Option<String>> {
+        let Some(path) =
+            resolve_import_path(reference_name, from_file, language, indexed_files, aliases)
+        else {
+            return Ok(None);
+        };
+        self.conn
+            .query_row(
+                "SELECT id FROM nodes WHERE kind = 'file' AND file_path = ?1 LIMIT 1",
+                [path],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    fn resolve_reference_by_name(
+        &self,
+        from_node_id: &str,
+        name: &str,
+        language: &str,
+    ) -> Result<Option<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, kind, file_path FROM nodes WHERE name = ?1 AND language = ?2 AND id != ?3",
+        )?;
+        let rows = stmt.query_map(params![name, language, from_node_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?;
+        let mut candidates = Vec::new();
+        for row in rows {
+            candidates.push(row?);
+        }
+        if candidates.is_empty() {
+            return Ok(None);
+        }
+        candidates.sort_by(|a, b| {
+            node_resolution_rank(&a.1)
+                .cmp(&node_resolution_rank(&b.1))
+                .then_with(|| a.2.cmp(&b.2))
+                .then_with(|| a.0.cmp(&b.0))
+        });
+        let best_rank = node_resolution_rank(&candidates[0].1);
+        let best_count = candidates
+            .iter()
+            .filter(|(_, kind, _)| node_resolution_rank(kind) == best_rank)
+            .count();
+        if best_count == 1 {
+            Ok(Some(candidates[0].0.clone()))
+        } else {
+            Ok(None)
+        }
     }
 
     pub fn edge_count(&self) -> Result<i64> {
@@ -594,6 +679,309 @@ fn search_score(query: &str, node: &Node) -> f64 {
         60.0
     } else {
         10.0
+    }
+}
+
+#[derive(Debug, Clone)]
+struct PathAlias {
+    prefix: String,
+    suffix: String,
+    replacements: Vec<String>,
+    has_wildcard: bool,
+}
+
+fn resolve_import_path(
+    reference_name: &str,
+    from_file: &str,
+    language: Language,
+    indexed_files: &BTreeSet<String>,
+    aliases: &[PathAlias],
+) -> Option<String> {
+    if is_external_import(reference_name, language, aliases) {
+        return None;
+    }
+
+    let mut bases = Vec::new();
+    if reference_name.starts_with('.') {
+        bases.push(join_normalized(parent_dir(from_file), reference_name));
+    } else {
+        bases.extend(apply_path_aliases(reference_name, aliases));
+        for (prefix, replacement) in [
+            ("@/", "src/"),
+            ("~/", "src/"),
+            ("@src/", "src/"),
+            ("src/", "src/"),
+            ("@app/", "app/"),
+            ("app/", "app/"),
+        ] {
+            if reference_name.starts_with(prefix) {
+                bases.push(format!(
+                    "{}{}",
+                    replacement,
+                    reference_name.trim_start_matches(prefix)
+                ));
+            }
+        }
+        bases.push(reference_name.to_string());
+    }
+
+    for base in bases {
+        for candidate in import_candidates(&base, language) {
+            let candidate = normalize_path(&candidate);
+            if indexed_files.contains(&candidate) {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
+fn is_external_import(reference_name: &str, language: Language, aliases: &[PathAlias]) -> bool {
+    if reference_name.starts_with('.') || reference_name.contains('/') {
+        return false;
+    }
+    if aliases
+        .iter()
+        .any(|alias| alias_matches(reference_name, alias))
+    {
+        return false;
+    }
+    match language {
+        Language::TypeScript | Language::JavaScript | Language::Tsx | Language::Jsx => true,
+        Language::Python => matches!(
+            reference_name.split('.').next().unwrap_or(reference_name),
+            "os" | "sys" | "json" | "re" | "math" | "datetime" | "collections" | "typing"
+        ),
+        _ => false,
+    }
+}
+
+fn import_candidates(base: &str, language: Language) -> Vec<String> {
+    let mut out = Vec::new();
+    out.push(base.to_string());
+    let exts: &[&str] = match language {
+        Language::TypeScript => &[
+            ".ts",
+            ".tsx",
+            ".d.ts",
+            ".js",
+            ".jsx",
+            "/index.ts",
+            "/index.tsx",
+            "/index.js",
+        ],
+        Language::JavaScript => &[".js", ".jsx", ".mjs", ".cjs", "/index.js", "/index.jsx"],
+        Language::Tsx => &[
+            ".tsx",
+            ".ts",
+            ".d.ts",
+            ".js",
+            ".jsx",
+            "/index.tsx",
+            "/index.ts",
+            "/index.js",
+        ],
+        Language::Jsx => &[".jsx", ".js", "/index.jsx", "/index.js"],
+        Language::Vue => &[".vue", ".ts", ".js", "/index.vue", "/index.ts", "/index.js"],
+        Language::Svelte => &[
+            ".svelte",
+            ".ts",
+            ".js",
+            "/index.svelte",
+            "/index.ts",
+            "/index.js",
+        ],
+        Language::Liquid => &[".liquid"],
+        Language::Python => &[".py", "/__init__.py"],
+        Language::Rust => &[".rs", "/mod.rs"],
+        Language::Go => &[".go"],
+        Language::Java => &[".java"],
+        Language::Kotlin => &[".kt", ".kts"],
+        Language::CSharp => &[".cs"],
+        Language::Php => &[".php"],
+        Language::Ruby => &[".rb"],
+        Language::Dart => &[".dart"],
+        Language::Pascal => &[".pas", ".pp"],
+        Language::Scala => &[".scala"],
+        _ => &[],
+    };
+    if !Path::new(base)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| !ext.is_empty())
+    {
+        out.extend(exts.iter().map(|ext| format!("{base}{ext}")));
+    }
+    out
+}
+
+fn load_project_aliases(project_root: &Path) -> Result<Vec<PathAlias>> {
+    for name in ["tsconfig.json", "jsconfig.json"] {
+        let path = project_root.join(name);
+        if !path.exists() {
+            continue;
+        }
+        let content = std::fs::read_to_string(path)?;
+        let value: Value = serde_json::from_str(&strip_jsonc(&content))?;
+        let Some(paths) = value
+            .pointer("/compilerOptions/paths")
+            .and_then(|paths| paths.as_object())
+        else {
+            return Ok(Vec::new());
+        };
+        let mut aliases = Vec::new();
+        for (pattern, replacements) in paths {
+            let Some(items) = replacements.as_array() else {
+                continue;
+            };
+            let replacements = items
+                .iter()
+                .filter_map(|item| item.as_str().map(normalize_path))
+                .collect::<Vec<_>>();
+            if replacements.is_empty() {
+                continue;
+            }
+            let (prefix, suffix, has_wildcard) = split_alias_pattern(pattern);
+            aliases.push(PathAlias {
+                prefix,
+                suffix,
+                replacements,
+                has_wildcard,
+            });
+        }
+        aliases.sort_by(|a, b| b.prefix.len().cmp(&a.prefix.len()));
+        return Ok(aliases);
+    }
+    Ok(Vec::new())
+}
+
+fn split_alias_pattern(pattern: &str) -> (String, String, bool) {
+    if let Some(index) = pattern.find('*') {
+        (
+            pattern[..index].to_string(),
+            pattern[index + 1..].to_string(),
+            true,
+        )
+    } else {
+        (pattern.to_string(), String::new(), false)
+    }
+}
+
+fn apply_path_aliases(reference_name: &str, aliases: &[PathAlias]) -> Vec<String> {
+    let mut out = Vec::new();
+    for alias in aliases {
+        if !alias_matches(reference_name, alias) {
+            continue;
+        }
+        let captured = if alias.has_wildcard {
+            &reference_name[alias.prefix.len()..reference_name.len() - alias.suffix.len()]
+        } else {
+            ""
+        };
+        for replacement in &alias.replacements {
+            out.push(if alias.has_wildcard {
+                replacement.replace('*', captured)
+            } else {
+                replacement.clone()
+            });
+        }
+        break;
+    }
+    out
+}
+
+fn alias_matches(reference_name: &str, alias: &PathAlias) -> bool {
+    if !reference_name.starts_with(&alias.prefix) || !reference_name.ends_with(&alias.suffix) {
+        return false;
+    }
+    alias.has_wildcard || reference_name == alias.prefix
+}
+
+fn strip_jsonc(source: &str) -> String {
+    let mut out = String::with_capacity(source.len());
+    let mut chars = source.chars().peekable();
+    let mut in_string = false;
+    while let Some(ch) = chars.next() {
+        if in_string {
+            out.push(ch);
+            if ch == '\\' {
+                if let Some(next) = chars.next() {
+                    out.push(next);
+                }
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        if ch == '"' {
+            in_string = true;
+            out.push(ch);
+            continue;
+        }
+        if ch == '/' && chars.peek() == Some(&'/') {
+            for next in chars.by_ref() {
+                if next == '\n' {
+                    out.push('\n');
+                    break;
+                }
+            }
+            continue;
+        }
+        if ch == '/' && chars.peek() == Some(&'*') {
+            chars.next();
+            while let Some(next) = chars.next() {
+                if next == '*' && chars.peek() == Some(&'/') {
+                    chars.next();
+                    break;
+                }
+            }
+            continue;
+        }
+        out.push(ch);
+    }
+    Regex::new(r",(\s*[}\]])")
+        .unwrap()
+        .replace_all(&out, "$1")
+        .to_string()
+}
+
+fn parent_dir(path: &str) -> &str {
+    path.rsplit_once('/')
+        .map(|(parent, _)| parent)
+        .unwrap_or("")
+}
+
+fn join_normalized(parent: &str, child: &str) -> String {
+    let mut parts = Vec::new();
+    let joined = format!("{parent}/{child}");
+    for part in joined.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            _ => parts.push(part.to_string()),
+        }
+    }
+    parts.join("/")
+}
+
+fn normalize_path(path: &str) -> String {
+    join_normalized("", &path.replace('\\', "/"))
+}
+
+fn node_resolution_rank(kind: &str) -> i64 {
+    match kind {
+        "function" => 0,
+        "method" => 1,
+        "component" => 2,
+        "class" => 3,
+        "struct" => 4,
+        "interface" => 5,
+        "trait" => 6,
+        "module" => 7,
+        "file" => 8,
+        _ => 20,
     }
 }
 

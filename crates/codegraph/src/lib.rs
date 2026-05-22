@@ -107,7 +107,7 @@ impl CodeGraph {
             result.edges_created += extraction.edges.len() as i64;
         }
 
-        self.db.resolve_references_by_name()?;
+        self.db.resolve_references(&self.root)?;
         result.edges_created = self.db.edge_count()?;
         result.success = result.files_errored == 0;
         result.duration_ms = start.elapsed().as_millis() as i64;
