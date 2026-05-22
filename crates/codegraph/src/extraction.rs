@@ -28,6 +28,7 @@ const GO_LANGUAGES: &[Language] = &[Language::Go];
 const JAVA_KOTLIN_LANGUAGES: &[Language] = &[Language::Java, Language::Kotlin];
 const CSHARP_LANGUAGES: &[Language] = &[Language::CSharp];
 const PHP_RUBY_LANGUAGES: &[Language] = &[Language::Php, Language::Ruby];
+const SWIFT_LANGUAGES: &[Language] = &[Language::Swift];
 const TYPESCRIPT_JAVASCRIPT_LANGUAGES: &[Language] = &[
     Language::TypeScript,
     Language::Tsx,
@@ -37,7 +38,6 @@ const TYPESCRIPT_JAVASCRIPT_LANGUAGES: &[Language] = &[
 const GENERIC_LANGUAGES: &[Language] = &[
     Language::C,
     Language::Cpp,
-    Language::Swift,
     Language::Dart,
     Language::Svelte,
     Language::Vue,
@@ -87,6 +87,11 @@ const LANGUAGE_EXTRACTORS: &[LanguageExtractor] = &[
         name: "php_ruby",
         languages: PHP_RUBY_LANGUAGES,
         extract: extract_php_ruby_entry,
+    },
+    LanguageExtractor {
+        name: "swift",
+        languages: SWIFT_LANGUAGES,
+        extract: extract_swift_entry,
     },
     LanguageExtractor {
         name: "generic",
@@ -320,6 +325,18 @@ fn extract_php_ruby_entry(
     refs: &mut Vec<UnresolvedReference>,
 ) {
     extract_php_ruby(file_path, source, language, now, nodes, edges, refs);
+}
+
+fn extract_swift_entry(
+    file_path: &str,
+    source: &str,
+    _language: Language,
+    now: i64,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+    refs: &mut Vec<UnresolvedReference>,
+) {
+    extract_swift(file_path, source, now, nodes, edges, refs);
 }
 
 fn extract_generic_entry(
@@ -2139,6 +2156,250 @@ fn add_contains_from_ruby_stack(
         });
     } else {
         add_contains(nodes, edges, node);
+    }
+}
+
+fn extract_swift(
+    file_path: &str,
+    source: &str,
+    now: i64,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+    refs: &mut Vec<UnresolvedReference>,
+) {
+    add_swift_imports(file_path, source, now, nodes, edges, refs);
+    add_swift_symbols(file_path, source, now, nodes, edges, refs);
+    add_call_refs(
+        file_path,
+        source,
+        Language::Swift,
+        nodes,
+        refs,
+        r"([A-Za-z_][A-Za-z0-9_\.]*)\s*\(",
+    );
+}
+
+fn add_swift_imports(
+    file_path: &str,
+    source: &str,
+    now: i64,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+    refs: &mut Vec<UnresolvedReference>,
+) {
+    let re = Regex::new(r"(?m)^\s*import\s+([A-Za-z_][A-Za-z0-9_\.]*)").unwrap();
+    for cap in re.captures_iter(source) {
+        let module = cap.get(1).unwrap();
+        let node = make_node(
+            file_path,
+            Language::Swift,
+            NodeKind::Import,
+            module.as_str(),
+            line_for(source, module.start()),
+            0,
+            now,
+            cap.get(0).map(|m| m.as_str().trim().to_string()),
+        );
+        add_contains(nodes, edges, &node);
+        refs_push(
+            refs,
+            &nodes[0].id,
+            module.as_str(),
+            EdgeKind::Imports,
+            file_path,
+            Language::Swift,
+            node.start_line,
+            0,
+        );
+        nodes.push(node);
+    }
+}
+
+fn add_swift_symbols(
+    file_path: &str,
+    source: &str,
+    now: i64,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+    refs: &mut Vec<UnresolvedReference>,
+) {
+    let type_re = Regex::new(
+        r"^\s*(?:(public|private|internal|fileprivate|open)\s+)?(?:(?:final|open)\s+)*(class|struct|protocol|enum)\s+([A-Za-z_][A-Za-z0-9_]*)([^{]*)\{?",
+    )
+    .unwrap();
+    let function_re = Regex::new(
+        r"^\s*(?:(public|private|internal|fileprivate|open)\s+)?((?:static|class|mutating|async|final|override)\s+)*func\s+([A-Za-z_][A-Za-z0-9_]*)\s*\([^)]*\)\s*(?:async\s+)?(?:throws\s+)?(?:->\s*[A-Za-z_][A-Za-z0-9_<>,\.\[\]\?]*)?",
+    )
+    .unwrap();
+    let typealias_re =
+        Regex::new(r"^\s*(?:(public|private|internal|fileprivate|open)\s+)?typealias\s+([A-Za-z_][A-Za-z0-9_]*)\s*=")
+            .unwrap();
+    let mut type_stack: Vec<(usize, String, String)> = Vec::new();
+
+    for (idx, line) in source.lines().enumerate() {
+        let line_no = idx as i64 + 1;
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with("//") {
+            continue;
+        }
+        let indent = python_indent_width(line);
+        while type_stack
+            .last()
+            .is_some_and(|(type_indent, _, _)| indent <= *type_indent && trimmed.starts_with('}'))
+        {
+            type_stack.pop();
+        }
+
+        if let Some(cap) = type_re.captures(line) {
+            let kind = match cap.get(2).unwrap().as_str() {
+                "struct" => NodeKind::Struct,
+                "protocol" => NodeKind::Protocol,
+                "enum" => NodeKind::Enum,
+                _ => NodeKind::Class,
+            };
+            let name = cap.get(3).unwrap();
+            let mut node = make_node(
+                file_path,
+                Language::Swift,
+                kind,
+                name.as_str(),
+                line_no,
+                indent as i64,
+                now,
+                Some(trimmed.to_string()),
+            );
+            node.visibility = cap
+                .get(1)
+                .map(|m| swift_visibility(m.as_str()).to_string())
+                .or_else(|| Some("internal".to_string()));
+            node.is_exported = matches!(node.visibility.as_deref(), Some("public" | "open"));
+            add_contains(nodes, edges, &node);
+            add_swift_inheritance_refs(
+                &node.id,
+                cap.get(4).map(|m| m.as_str()).unwrap_or_default(),
+                file_path,
+                line_no,
+                refs,
+            );
+            type_stack.push((indent, name.as_str().to_string(), node.id.clone()));
+            nodes.push(node);
+            continue;
+        }
+
+        if let Some(cap) = function_re.captures(line) {
+            let name = cap.get(3).unwrap().as_str();
+            let kind = if type_stack.is_empty() {
+                NodeKind::Function
+            } else {
+                NodeKind::Method
+            };
+            let mut node = make_node(
+                file_path,
+                Language::Swift,
+                kind,
+                name,
+                line_no,
+                indent as i64,
+                now,
+                Some(trimmed.to_string()),
+            );
+            node.visibility = cap
+                .get(1)
+                .map(|m| swift_visibility(m.as_str()).to_string())
+                .or_else(|| Some("internal".to_string()));
+            node.is_exported = matches!(node.visibility.as_deref(), Some("public" | "open"));
+            let modifiers = cap.get(2).map(|m| m.as_str()).unwrap_or_default();
+            node.is_static = modifiers.contains("static")
+                || modifiers.contains("class")
+                || trimmed.contains(" static ")
+                || trimmed.contains(" class ");
+            node.is_async = modifiers.contains("async") || trimmed.contains(" async ");
+            if let Some((_, type_name, parent_id)) = type_stack.last() {
+                node.qualified_name = format!("{}.{}", type_name, name);
+                edges.push(Edge {
+                    id: None,
+                    source: parent_id.clone(),
+                    target: node.id.clone(),
+                    kind: EdgeKind::Contains,
+                    line: None,
+                    col: None,
+                    provenance: Some("swift".into()),
+                });
+            } else {
+                add_contains(nodes, edges, &node);
+            }
+            nodes.push(node);
+            continue;
+        }
+
+        if let Some(cap) = typealias_re.captures(line) {
+            let name = cap.get(2).unwrap();
+            let mut node = make_node(
+                file_path,
+                Language::Swift,
+                NodeKind::TypeAlias,
+                name.as_str(),
+                line_no,
+                indent as i64,
+                now,
+                Some(trimmed.to_string()),
+            );
+            node.visibility = cap
+                .get(1)
+                .map(|m| swift_visibility(m.as_str()).to_string())
+                .or_else(|| Some("internal".to_string()));
+            node.is_exported = matches!(node.visibility.as_deref(), Some("public" | "open"));
+            add_contains(nodes, edges, &node);
+            nodes.push(node);
+        }
+    }
+}
+
+fn swift_visibility(visibility: &str) -> &str {
+    match visibility {
+        "fileprivate" => "private",
+        other => other,
+    }
+}
+
+fn add_swift_inheritance_refs(
+    node_id: &str,
+    tail: &str,
+    file_path: &str,
+    line: i64,
+    refs: &mut Vec<UnresolvedReference>,
+) {
+    let Some(base_tail) = tail.trim().strip_prefix(':') else {
+        return;
+    };
+    let mut names = base_tail
+        .split(',')
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(|name| name.split_whitespace().next().unwrap_or(name));
+    if let Some(first) = names.next() {
+        refs_push(
+            refs,
+            node_id,
+            first,
+            EdgeKind::Extends,
+            file_path,
+            Language::Swift,
+            line,
+            0,
+        );
+    }
+    for name in names {
+        refs_push(
+            refs,
+            node_id,
+            name,
+            EdgeKind::Implements,
+            file_path,
+            Language::Swift,
+            line,
+            0,
+        );
     }
 }
 

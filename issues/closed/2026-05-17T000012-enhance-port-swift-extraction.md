@@ -1,6 +1,7 @@
 # Port Swift extraction
 
 Created: 2026-05-17
+Completed: 2026-05-22
 Model: GPT-5 Codex
 
 ## 背景
@@ -24,3 +25,9 @@ original は Swift の classes、structs、protocols、functions、imports、inh
 - Swift fixture tests
 - `cargo test --all --all-features`
 
+## 解決方法
+
+- Swift 専用 extractor を registry に追加し、generic extraction から分離した。
+- class、struct、protocol、enum、typealias、function、method、import を抽出し、visibility/static/async metadata を保持した。
+- inheritance / protocol conformance を unresolved refs として記録し、Vapor/SwiftUI resolver が参照できる symbol metadata を残した。
+- Swift fixture tests を追加し、`cargo test --all --all-features` で確認した。

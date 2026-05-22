@@ -23,6 +23,7 @@ fn harness_can_assert_extractor_registry_dispatch() {
     assert_eq!(registered_extractor_name(Language::CSharp), "csharp");
     assert_eq!(registered_extractor_name(Language::Php), "php_ruby");
     assert_eq!(registered_extractor_name(Language::Ruby), "php_ruby");
+    assert_eq!(registered_extractor_name(Language::Swift), "swift");
 }
 
 #[test]
@@ -506,6 +507,72 @@ end
         .unwrap();
     assert!(index.is_static);
     assert_eq!(index.qualified_name, "PaymentsController.index");
+}
+
+#[test]
+fn harness_extracts_swift_symbols_imports_conformance_and_calls() {
+    let fixture = OriginalSourceFixture::new(
+        "PaymentsView.swift",
+        r#"
+import SwiftUI
+import Vapor
+
+public protocol Routable {
+    func routes()
+}
+
+public class PaymentsController: RouteCollection, Routable {
+    public static func boot(routes: RoutesBuilder) async throws {
+        routes.get("payments", use: index)
+    }
+
+    private func index(req: Request) -> String {
+        return renderPayment()
+    }
+}
+
+struct PaymentsView: View {
+    var body: some View {
+        Text("Payments")
+    }
+}
+
+public typealias Handler = (Request) -> String
+
+func renderPayment() -> String {
+    return "ok"
+}
+"#,
+    );
+
+    assert_eq!(fixture.language(), Language::Swift);
+    fixture.assert_node(NodeKind::Import, "SwiftUI");
+    fixture.assert_node(NodeKind::Import, "Vapor");
+    fixture.assert_exported_node(NodeKind::Protocol, "Routable");
+    fixture.assert_exported_node(NodeKind::Class, "PaymentsController");
+    fixture.assert_node(NodeKind::Struct, "PaymentsView");
+    fixture.assert_exported_node(NodeKind::TypeAlias, "Handler");
+    fixture.assert_node(NodeKind::Method, "boot");
+    fixture.assert_node(NodeKind::Method, "index");
+    fixture.assert_node(NodeKind::Function, "renderPayment");
+    fixture.assert_reference(EdgeKind::Imports, "SwiftUI");
+    fixture.assert_reference(EdgeKind::Imports, "Vapor");
+    fixture.assert_reference(EdgeKind::Extends, "RouteCollection");
+    fixture.assert_reference(EdgeKind::Implements, "Routable");
+    fixture.assert_reference(EdgeKind::Extends, "View");
+    fixture.assert_reference(EdgeKind::Calls, "routes.get");
+    fixture.assert_reference(EdgeKind::Calls, "renderPayment");
+
+    let boot = fixture
+        .result()
+        .nodes
+        .iter()
+        .find(|node| node.kind == NodeKind::Method && node.name == "boot")
+        .unwrap();
+    assert!(boot.is_static);
+    assert!(boot.is_async);
+    assert_eq!(boot.visibility.as_deref(), Some("public"));
+    assert_eq!(boot.qualified_name, "PaymentsController.boot");
 }
 
 #[test]
