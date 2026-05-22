@@ -1,6 +1,7 @@
 # Port installer and Claude config workflow
 
 Created: 2026-05-17
+Completed: 2026-05-22
 Model: GPT-5 Codex
 
 ## 背景
@@ -25,3 +26,10 @@ original の installer は MCP server 設定、permissions、CLAUDE.md instructi
 - Temp HOME/config fixture tests
 - `cargo test --all --all-features`
 
+## 解決方法
+
+- `cgz install --global/--local` を実装し、Claude MCP server 設定を `.claude.json` に追加・更新するようにした。
+- `--allow-permissions` 指定時だけ `.claude/settings.json` の `permissions.allow` に CodeGraph MCP tool を追加するようにした。
+- managed marker 付きの `.claude/CLAUDE.md` CodeGraph セクションを追加・更新し、既存の user content と他 MCP server 設定を保持するようにした。
+- local install では `--yes` 指定時に `cgz init -i` 相当の初期化・index を実行し、`--no-init` で明示的に skip できるようにした。
+- temp fixture と CLI integration test を追加し、`cargo test --all --all-features` と Claude Code review (`LGTM`) で確認した。

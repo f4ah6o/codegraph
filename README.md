@@ -129,14 +129,15 @@ finish with the target repository's normal tests, type checks, or build checks.
 See [docs/AGENT_WORKFLOW.md](./docs/AGENT_WORKFLOW.md) for the short playbook.
 See [docs/AGENT_CONTEXT_EVAL.md](./docs/AGENT_CONTEXT_EVAL.md) for the
 automated context-success fixture used to guard agent navigation quality.
-Run `cgz skills` to print a portable Markdown skill for agents that should use
-`cgz` effectively in other repositories.
+Run `cgz install --local` to add CodeGraph to the current project's Claude
+configuration. It writes a `.claude.json` MCP server entry and a managed
+`.claude/CLAUDE.md` CodeGraph section without replacing unrelated user content.
+Use `--global` to target `~/.claude.json` and `~/.claude/CLAUDE.md`.
 
-Running `cgz` with no subcommand currently prints:
-
-```text
-Rust CodeGraph installer is not implemented yet. Run `cgz init -i` in a project.
-```
+`cgz install --allow-permissions` also adds explicit CodeGraph MCP tool entries
+to Claude's `permissions.allow` list. Local installs do not initialize the
+project index unless `--yes` is passed; use `--no-init` to skip that prompt path
+entirely.
 
 ## Release Helpers
 

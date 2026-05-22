@@ -2,6 +2,7 @@ pub mod config;
 pub mod db;
 pub mod extraction;
 pub mod graph;
+pub mod installer;
 pub mod mcp;
 pub mod types;
 pub mod watcher;

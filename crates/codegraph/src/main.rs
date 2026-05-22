@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Result};
 use clap::{Parser, Subcommand};
+use codegraph::installer::InstallOptions;
 use codegraph::types::{FileListFormat, FileListOptions, FileListReport, SearchOptions};
 use codegraph::watcher::{run_watcher, WatcherConfig};
 use codegraph::{find_nearest_codegraph_root, is_initialized, CodeGraph};
@@ -141,12 +142,30 @@ enum Command {
         debounce: u64,
     },
     Skills,
-    Install,
+    Install {
+        #[arg(long, conflicts_with = "local")]
+        global: bool,
+        #[arg(long)]
+        local: bool,
+        #[arg(short, long)]
+        yes: bool,
+        #[arg(long)]
+        no_init: bool,
+        #[arg(long)]
+        allow_permissions: bool,
+        #[arg(short, long)]
+        path: Option<PathBuf>,
+    },
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    match cli.command.unwrap_or(Command::Install) {
+    let Some(command) = cli.command else {
+        println!("Run `cgz install --local` to configure Claude, or `cgz init -i` to initialize a project.");
+        return Ok(());
+    };
+
+    match command {
         Command::Init { path, index } => {
             let root = path.unwrap_or(std::env::current_dir()?);
             let mut cg = CodeGraph::init(&root)?;
@@ -455,10 +474,46 @@ fn main() -> Result<()> {
         Command::Skills => {
             print!("{}", include_str!("../assets/cgz-skill.md"));
         }
-        Command::Install => {
-            println!(
-                "Rust CodeGraph installer is not implemented yet. Run `cgz init -i` in a project."
-            );
+        Command::Install {
+            global,
+            local,
+            yes,
+            no_init,
+            allow_permissions,
+            path,
+        } => {
+            let result = codegraph::installer::install(&InstallOptions {
+                global,
+                local,
+                yes,
+                no_init,
+                allow_permissions,
+                project_path: path,
+                home_dir: None,
+            })?;
+            println!("Claude MCP config: {}", result.claude_json_path.display());
+            if result.claude_json_changed {
+                println!("  Added CodeGraph MCP server configuration");
+            } else {
+                println!("  CodeGraph MCP server configuration already up to date");
+            }
+            if let Some(settings_path) = result.settings_json_path.as_ref() {
+                println!("Claude settings: {}", settings_path.display());
+                if result.settings_json_changed {
+                    println!("  Added CodeGraph MCP tool permissions");
+                } else {
+                    println!("  CodeGraph MCP tool permissions already up to date");
+                }
+            }
+            println!("CLAUDE.md: {}", result.claude_md_path.display());
+            if result.claude_md_changed {
+                println!("  Added CodeGraph section to CLAUDE.md");
+            } else {
+                println!("  CLAUDE.md CodeGraph section already up to date");
+            }
+            if !result.init_message.is_empty() {
+                println!("{}", result.init_message);
+            }
         }
     }
     Ok(())
