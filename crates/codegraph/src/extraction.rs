@@ -26,6 +26,7 @@ const MOONBIT_LANGUAGES: &[Language] = &[Language::MoonBit];
 const PYTHON_LANGUAGES: &[Language] = &[Language::Python];
 const GO_LANGUAGES: &[Language] = &[Language::Go];
 const JAVA_KOTLIN_LANGUAGES: &[Language] = &[Language::Java, Language::Kotlin];
+const CSHARP_LANGUAGES: &[Language] = &[Language::CSharp];
 const TYPESCRIPT_JAVASCRIPT_LANGUAGES: &[Language] = &[
     Language::TypeScript,
     Language::Tsx,
@@ -35,7 +36,6 @@ const TYPESCRIPT_JAVASCRIPT_LANGUAGES: &[Language] = &[
 const GENERIC_LANGUAGES: &[Language] = &[
     Language::C,
     Language::Cpp,
-    Language::CSharp,
     Language::Php,
     Language::Ruby,
     Language::Swift,
@@ -78,6 +78,11 @@ const LANGUAGE_EXTRACTORS: &[LanguageExtractor] = &[
         name: "java_kotlin",
         languages: JAVA_KOTLIN_LANGUAGES,
         extract: extract_java_kotlin_entry,
+    },
+    LanguageExtractor {
+        name: "csharp",
+        languages: CSHARP_LANGUAGES,
+        extract: extract_csharp_entry,
     },
     LanguageExtractor {
         name: "generic",
@@ -287,6 +292,18 @@ fn extract_java_kotlin_entry(
     refs: &mut Vec<UnresolvedReference>,
 ) {
     extract_java_kotlin(file_path, source, language, now, nodes, edges, refs);
+}
+
+fn extract_csharp_entry(
+    file_path: &str,
+    source: &str,
+    _language: Language,
+    now: i64,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+    refs: &mut Vec<UnresolvedReference>,
+) {
+    extract_csharp(file_path, source, now, nodes, edges, refs);
 }
 
 fn extract_generic_entry(
@@ -1265,6 +1282,338 @@ fn add_java_kotlin_metadata_refs(
             *annotation_line,
             0,
         );
+    }
+}
+
+fn extract_csharp(
+    file_path: &str,
+    source: &str,
+    now: i64,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+    refs: &mut Vec<UnresolvedReference>,
+) {
+    add_csharp_usings(file_path, source, now, nodes, edges, refs);
+    add_csharp_types_and_members(file_path, source, now, nodes, edges, refs);
+    add_csharp_call_refs(file_path, source, nodes, refs);
+}
+
+fn add_csharp_usings(
+    file_path: &str,
+    source: &str,
+    now: i64,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+    refs: &mut Vec<UnresolvedReference>,
+) {
+    let re = Regex::new(
+        r"(?m)^\s*using\s+(?:static\s+)?(?:(?:[A-Za-z_][A-Za-z0-9_]*)\s*=\s*)?([A-Za-z_][A-Za-z0-9_\.]*)\s*;",
+    )
+    .unwrap();
+    for cap in re.captures_iter(source) {
+        let module = cap.get(1).unwrap();
+        let node = make_node(
+            file_path,
+            Language::CSharp,
+            NodeKind::Import,
+            module.as_str(),
+            line_for(source, module.start()),
+            0,
+            now,
+            cap.get(0).map(|m| m.as_str().trim().to_string()),
+        );
+        add_contains(nodes, edges, &node);
+        refs_push(
+            refs,
+            &nodes[0].id,
+            module.as_str(),
+            EdgeKind::Imports,
+            file_path,
+            Language::CSharp,
+            node.start_line,
+            0,
+        );
+        nodes.push(node);
+    }
+}
+
+fn add_csharp_types_and_members(
+    file_path: &str,
+    source: &str,
+    now: i64,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+    refs: &mut Vec<UnresolvedReference>,
+) {
+    let type_re = Regex::new(
+        r"^\s*(?:(public|private|protected|internal)\s+)?(?:(?:abstract|sealed|static|partial)\s+)*(class|interface|struct|enum)\s+([A-Za-z_][A-Za-z0-9_]*)([^{]*)\{?",
+    )
+    .unwrap();
+    let method_re = Regex::new(
+        r"^\s*(?:(public|private|protected|internal)\s+)?((?:static|async|virtual|override|abstract|sealed|partial)\s+)*(?:[A-Za-z_][A-Za-z0-9_<>,\.\?\[\]\s]*\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\([^;{}]*\)\s*(?:where\s+[^{]+)?\{?",
+    )
+    .unwrap();
+    let property_re = Regex::new(
+        r"^\s*(?:(public|private|protected|internal)\s+)?((?:static|virtual|override|abstract|sealed)\s+)*(?:[A-Za-z_][A-Za-z0-9_<>,\.\?\[\]\s]*\s+)([A-Za-z_][A-Za-z0-9_]*)\s*\{",
+    )
+    .unwrap();
+    let attribute_re = Regex::new(r"^\s*\[\s*([A-Za-z_][A-Za-z0-9_\.]*)").unwrap();
+    let mut type_stack: Vec<(usize, String, String)> = Vec::new();
+    let mut pending_attributes: Vec<(String, i64)> = Vec::new();
+
+    for (idx, line) in source.lines().enumerate() {
+        let line_no = idx as i64 + 1;
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with("//") {
+            continue;
+        }
+        let indent = python_indent_width(line);
+        while type_stack
+            .last()
+            .is_some_and(|(type_indent, _, _)| indent <= *type_indent && trimmed.starts_with('}'))
+        {
+            type_stack.pop();
+        }
+
+        if let Some(cap) = attribute_re.captures(line) {
+            pending_attributes.push((cap[1].to_string(), line_no));
+            continue;
+        }
+
+        if let Some(cap) = type_re.captures(line) {
+            let keyword = cap.get(2).unwrap().as_str();
+            let kind = match keyword {
+                "interface" => NodeKind::Interface,
+                "struct" => NodeKind::Struct,
+                "enum" => NodeKind::Enum,
+                _ => NodeKind::Class,
+            };
+            let name = cap.get(3).unwrap();
+            let mut node = make_node(
+                file_path,
+                Language::CSharp,
+                kind,
+                name.as_str(),
+                line_no,
+                indent as i64,
+                now,
+                Some(csharp_signature(&pending_attributes, trimmed)),
+            );
+            node.visibility = cap
+                .get(1)
+                .map(|m| m.as_str().to_string())
+                .or_else(|| Some("private".to_string()));
+            node.is_exported = node.visibility.as_deref() == Some("public");
+            add_contains(nodes, edges, &node);
+            add_csharp_metadata_refs(
+                &node.id,
+                cap.get(4).map(|m| m.as_str()).unwrap_or_default(),
+                &pending_attributes,
+                file_path,
+                line_no,
+                refs,
+            );
+            type_stack.push((indent, name.as_str().to_string(), node.id.clone()));
+            nodes.push(node);
+            pending_attributes.clear();
+            continue;
+        }
+
+        let member = method_re
+            .captures(line)
+            .and_then(|cap| {
+                let name = cap.get(3).unwrap().as_str();
+                let skip = matches!(
+                    name,
+                    "if" | "for" | "foreach" | "while" | "switch" | "catch" | "return" | "new"
+                );
+                (!skip).then(|| {
+                    (
+                        NodeKind::Method,
+                        name.to_string(),
+                        cap.get(1).map(|m| m.as_str().to_string()),
+                        cap.get(2)
+                            .map(|m| m.as_str().to_string())
+                            .unwrap_or_default(),
+                        cap.get(0).unwrap().as_str().trim().to_string(),
+                    )
+                })
+            })
+            .or_else(|| {
+                property_re.captures(line).map(|cap| {
+                    (
+                        NodeKind::Property,
+                        cap.get(3).unwrap().as_str().to_string(),
+                        cap.get(1).map(|m| m.as_str().to_string()),
+                        cap.get(2)
+                            .map(|m| m.as_str().to_string())
+                            .unwrap_or_default(),
+                        cap.get(0).unwrap().as_str().trim().to_string(),
+                    )
+                })
+            });
+
+        if let Some((kind, name, visibility, modifiers, signature)) = member {
+            let mut node = make_node(
+                file_path,
+                Language::CSharp,
+                kind,
+                &name,
+                line_no,
+                indent as i64,
+                now,
+                Some(csharp_signature(&pending_attributes, &signature)),
+            );
+            node.visibility = visibility.or_else(|| Some("private".to_string()));
+            node.is_exported = node.visibility.as_deref() == Some("public");
+            node.is_static = modifiers.contains("static") || signature.contains(" static ");
+            node.is_async = modifiers.contains("async") || signature.contains(" async ");
+            if let Some((_, type_name, parent_id)) = type_stack.last() {
+                node.qualified_name = format!("{}.{}", type_name, name);
+                edges.push(Edge {
+                    id: None,
+                    source: parent_id.clone(),
+                    target: node.id.clone(),
+                    kind: EdgeKind::Contains,
+                    line: None,
+                    col: None,
+                    provenance: Some("csharp".into()),
+                });
+            } else {
+                add_contains(nodes, edges, &node);
+            }
+            for (attribute, attribute_line) in &pending_attributes {
+                refs_push(
+                    refs,
+                    &node.id,
+                    attribute,
+                    EdgeKind::Decorates,
+                    file_path,
+                    Language::CSharp,
+                    *attribute_line,
+                    0,
+                );
+            }
+            nodes.push(node);
+            pending_attributes.clear();
+            continue;
+        }
+
+        pending_attributes.clear();
+    }
+}
+
+fn csharp_signature(attributes: &[(String, i64)], declaration: &str) -> String {
+    if attributes.is_empty() {
+        declaration.to_string()
+    } else {
+        let mut lines: Vec<String> = attributes
+            .iter()
+            .map(|(attribute, _)| format!("[{}]", attribute))
+            .collect();
+        lines.push(declaration.to_string());
+        lines.join("\n")
+    }
+}
+
+fn add_csharp_metadata_refs(
+    node_id: &str,
+    tail: &str,
+    attributes: &[(String, i64)],
+    file_path: &str,
+    line: i64,
+    refs: &mut Vec<UnresolvedReference>,
+) {
+    let base_tail = tail.trim().strip_prefix(':').unwrap_or("").trim();
+    let mut bases = base_tail
+        .split(',')
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(|name| name.split_whitespace().next().unwrap_or(name));
+    if let Some(base) = bases.next() {
+        refs_push(
+            refs,
+            node_id,
+            base,
+            EdgeKind::Extends,
+            file_path,
+            Language::CSharp,
+            line,
+            0,
+        );
+    }
+    for name in bases {
+        refs_push(
+            refs,
+            node_id,
+            name,
+            EdgeKind::Implements,
+            file_path,
+            Language::CSharp,
+            line,
+            0,
+        );
+    }
+    for (attribute, attribute_line) in attributes {
+        refs_push(
+            refs,
+            node_id,
+            attribute,
+            EdgeKind::Decorates,
+            file_path,
+            Language::CSharp,
+            *attribute_line,
+            0,
+        );
+    }
+}
+
+fn add_csharp_call_refs(
+    file_path: &str,
+    source: &str,
+    nodes: &[Node],
+    refs: &mut Vec<UnresolvedReference>,
+) {
+    let re = Regex::new(r"([A-Za-z_][A-Za-z0-9_\.]*)\s*(?:<[^;\n()]+>)?\s*\(").unwrap();
+    let keywords = [
+        "if", "for", "foreach", "while", "switch", "catch", "return", "new", "typeof", "nameof",
+        "using",
+    ];
+    for cap in re.captures_iter(source) {
+        let name_match = cap.get(1).unwrap();
+        let name = name_match.as_str();
+        let line = line_for(source, name_match.start());
+        let line_text = source
+            .lines()
+            .nth(line.saturating_sub(1) as usize)
+            .unwrap_or_default()
+            .trim_start();
+        if keywords.contains(&name)
+            || line_text.contains(&format!("{name}("))
+                && matches!(
+                    line_text.split_whitespace().next(),
+                    Some("public" | "private" | "protected" | "internal" | "static" | "async")
+                )
+        {
+            continue;
+        }
+        if let Some(caller) = nodes
+            .iter()
+            .filter(|n| matches!(n.kind, NodeKind::Function | NodeKind::Method))
+            .rev()
+            .find(|n| n.start_line <= line)
+        {
+            refs_push(
+                refs,
+                &caller.id,
+                name,
+                EdgeKind::Calls,
+                file_path,
+                Language::CSharp,
+                line,
+                0,
+            );
+        }
     }
 }
 

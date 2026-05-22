@@ -20,6 +20,7 @@ fn harness_can_assert_extractor_registry_dispatch() {
     assert_eq!(registered_extractor_name(Language::Go), "go");
     assert_eq!(registered_extractor_name(Language::Java), "java_kotlin");
     assert_eq!(registered_extractor_name(Language::Kotlin), "java_kotlin");
+    assert_eq!(registered_extractor_name(Language::CSharp), "csharp");
 }
 
 #[test]
@@ -352,6 +353,60 @@ fun helperName(value: String): String {
         .unwrap();
     assert!(method.is_async);
     assert_eq!(method.qualified_name, "PaymentService.listPayments");
+}
+
+#[test]
+fn harness_extracts_csharp_symbols_attributes_inheritance_and_usings() {
+    let fixture = OriginalSourceFixture::new(
+        "PaymentsController.cs",
+        r#"
+using System.Collections.Generic;
+using static System.Math;
+using Json = System.Text.Json.JsonSerializer;
+
+[ApiController]
+public class PaymentsController : ControllerBase, IPaymentsController {
+    public string Name { get; set; }
+
+    [HttpGet("/payments")]
+    public static async Task<List<string>> ListPayments() {
+        return Json.Deserialize<List<string>>("[]");
+    }
+}
+
+public interface IPaymentsController {
+    Task<List<string>> ListPayments();
+}
+"#,
+    );
+
+    assert_eq!(fixture.language(), Language::CSharp);
+    fixture.assert_exported_node(NodeKind::Class, "PaymentsController");
+    fixture.assert_exported_node(NodeKind::Interface, "IPaymentsController");
+    fixture.assert_node(NodeKind::Property, "Name");
+    fixture.assert_node(NodeKind::Method, "ListPayments");
+    fixture.assert_node(NodeKind::Import, "System.Collections.Generic");
+    fixture.assert_node(NodeKind::Import, "System.Math");
+    fixture.assert_node(NodeKind::Import, "System.Text.Json.JsonSerializer");
+    fixture.assert_reference(EdgeKind::Imports, "System.Collections.Generic");
+    fixture.assert_reference(EdgeKind::Imports, "System.Math");
+    fixture.assert_reference(EdgeKind::Imports, "System.Text.Json.JsonSerializer");
+    fixture.assert_reference(EdgeKind::Extends, "ControllerBase");
+    fixture.assert_reference(EdgeKind::Implements, "IPaymentsController");
+    fixture.assert_reference(EdgeKind::Decorates, "ApiController");
+    fixture.assert_reference(EdgeKind::Decorates, "HttpGet");
+    fixture.assert_reference(EdgeKind::Calls, "Json.Deserialize");
+
+    let method = fixture
+        .result()
+        .nodes
+        .iter()
+        .find(|node| node.kind == NodeKind::Method && node.name == "ListPayments")
+        .unwrap();
+    assert!(method.is_static);
+    assert!(method.is_async);
+    assert_eq!(method.visibility.as_deref(), Some("public"));
+    assert_eq!(method.qualified_name, "PaymentsController.ListPayments");
 }
 
 #[test]
