@@ -10,7 +10,7 @@ pub mod watcher;
 use anyhow::{anyhow, Context, Result};
 use config::{load_config, save_config, CodeGraphConfig};
 use db::Database;
-use extraction::{detect_language, extract_from_source, should_include_file};
+use extraction::{detect_language, detect_parse_error, extract_from_source, should_include_file};
 use graph::{GraphTraverser, Subgraph};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -20,8 +20,8 @@ use types::{
     AffectedDebugEntry, AffectedMatchSources, AffectedReport, ContextFileSummary, ContextMatch,
     ContextReport, ContextSymbolSummary, EdgeKind, ExploreRelationship, ExploreReport,
     ExploreSourceFile, ExploreSourceSection, FileLanguageGroup, FileListEntry, FileListFormat,
-    FileListOptions, FileListReport, FileRecord, FileTreeEntry, GraphPath, GraphStats, IndexResult,
-    Language, Node, NodeEdge, SearchOptions, SearchResult,
+    FileListOptions, FileListReport, FileRecord, FileTreeEntry, GraphPath, GraphStats, IndexError,
+    IndexErrorCategory, IndexResult, Language, Node, NodeEdge, SearchOptions, SearchResult,
 };
 
 pub const CODEGRAPH_DIR: &str = ".codegraph";
@@ -117,8 +117,12 @@ impl CodeGraph {
             let content = match fs::read_to_string(&full) {
                 Ok(content) => content,
                 Err(err) => {
-                    result.files_errored += 1;
-                    result.errors.push(format!("{}: {}", path.display(), err));
+                    push_index_error(
+                        &mut result,
+                        categorize_read_error(&err),
+                        &path,
+                        err.to_string(),
+                    );
                     continue;
                 }
             };
@@ -631,8 +635,7 @@ impl CodeGraph {
         let content = match fs::read_to_string(&full) {
             Ok(content) => content,
             Err(err) => {
-                result.files_errored += 1;
-                result.errors.push(format!("{}: {}", path.display(), err));
+                push_index_error(result, categorize_read_error(&err), path, err.to_string());
                 return Ok(());
             }
         };
@@ -650,7 +653,22 @@ impl CodeGraph {
         let lang = detect_language(path, &content);
         if lang.is_unknown() {
             self.db.delete_file_index(&path_key)?;
-            result.files_skipped += 1;
+            push_index_error(
+                result,
+                IndexErrorCategory::Unsupported,
+                path,
+                "unsupported file type".to_string(),
+            );
+            return Ok(());
+        }
+        if detect_parse_error(&content, lang) {
+            self.db.delete_file_index(&path_key)?;
+            push_index_error(
+                result,
+                IndexErrorCategory::Parse,
+                path,
+                format!("could not parse {lang} syntax"),
+            );
             return Ok(());
         }
         let full = self.root.join(path);
@@ -709,6 +727,28 @@ impl CodeGraph {
         out.sort();
         Ok(out)
     }
+}
+
+fn categorize_read_error(err: &std::io::Error) -> IndexErrorCategory {
+    if err.kind() == std::io::ErrorKind::WouldBlock {
+        IndexErrorCategory::Lock
+    } else {
+        IndexErrorCategory::Read
+    }
+}
+
+fn push_index_error(
+    result: &mut IndexResult,
+    category: IndexErrorCategory,
+    path: &Path,
+    message: String,
+) {
+    result.files_errored += 1;
+    result.errors.push(IndexError {
+        category,
+        path: path.display().to_string(),
+        message,
+    });
 }
 
 fn file_list_entry(file: FileRecord, include_metadata: bool) -> FileListEntry {

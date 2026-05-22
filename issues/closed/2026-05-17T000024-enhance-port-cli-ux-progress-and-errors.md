@@ -1,6 +1,7 @@
 # Port CLI UX progress and error reporting
 
 Created: 2026-05-17
+Completed: 2026-05-23
 Model: GPT-5 Codex
 
 ## 背景
@@ -25,3 +26,9 @@ original CLI は progress、duration/count formatting、parse/read error summary
 - CLI output snapshot or assertion tests
 - `cargo test --all --all-features`
 
+## 解決方法
+
+- `IndexErrorCategory` と構造化された `IndexError` を追加し、read/parse/unsupported/lock の error category を CLI 出力に表示するようにした。
+- `index`/`sync`/`init -i` で deterministic な progress 開始メッセージ、human-readable な count/duration summary、index failure 時の non-zero exit を実装した。
+- Rust parse error と unsupported file の CLI integration test、quiet mode と JSON 出力維持の test を追加した。
+- `cargo test --all --all-features` と opencode review-loop の exact `LGTM` で確認した。

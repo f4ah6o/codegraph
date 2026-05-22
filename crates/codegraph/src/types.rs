@@ -340,6 +340,39 @@ pub struct FileTreeEntry {
     pub children: Vec<FileTreeEntry>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IndexErrorCategory {
+    Read,
+    Parse,
+    Unsupported,
+    Lock,
+}
+
+impl IndexErrorCategory {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Read => "read",
+            Self::Parse => "parse",
+            Self::Unsupported => "unsupported",
+            Self::Lock => "lock",
+        }
+    }
+}
+
+impl fmt::Display for IndexErrorCategory {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct IndexError {
+    pub category: IndexErrorCategory,
+    pub path: String,
+    pub message: String,
+}
+
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct IndexResult {
     pub success: bool,
@@ -349,7 +382,7 @@ pub struct IndexResult {
     pub files_errored: i64,
     pub nodes_created: i64,
     pub edges_created: i64,
-    pub errors: Vec<String>,
+    pub errors: Vec<IndexError>,
     pub duration_ms: i64,
 }
 

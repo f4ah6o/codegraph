@@ -177,6 +177,24 @@ pub fn detect_language(path: &Path, _source: &str) -> Language {
     }
 }
 
+pub fn detect_parse_error(source: &str, language: Language) -> bool {
+    match language {
+        Language::Rust => tree_sitter_has_error(source, tree_sitter_rust::LANGUAGE.into()),
+        _ => false,
+    }
+}
+
+fn tree_sitter_has_error(source: &str, language: tree_sitter::Language) -> bool {
+    let mut parser = Parser::new();
+    if parser.set_language(&language).is_err() {
+        return false;
+    }
+    parser
+        .parse(source, None)
+        .map(|tree| tree.root_node().has_error())
+        .unwrap_or(false)
+}
+
 pub fn extract_from_source(path: &Path, source: &str, language: Language) -> ExtractionResult {
     let file_path = path.to_string_lossy().replace('\\', "/");
     let now = now_ms();

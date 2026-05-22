@@ -171,8 +171,12 @@ fn main() -> Result<()> {
             let mut cg = CodeGraph::init(&root)?;
             println!("Initialized in {}", cg.root().display());
             if index {
+                eprintln!("Indexing started");
                 let result = cg.index_all()?;
                 print_index_result(&result);
+                if !result.success {
+                    std::process::exit(1);
+                }
             } else {
                 println!("Run `cgz index` to index the project");
             }
@@ -192,6 +196,9 @@ fn main() -> Result<()> {
         Command::Index { path, quiet, .. } => {
             let root = resolve_root(path)?;
             let mut cg = CodeGraph::open(root)?;
+            if !quiet {
+                eprintln!("Indexing started");
+            }
             let result = cg.index_all()?;
             if !quiet {
                 print_index_result(&result);
@@ -203,9 +210,15 @@ fn main() -> Result<()> {
         Command::Sync { path, quiet } => {
             let root = resolve_root(path)?;
             let mut cg = CodeGraph::open(root)?;
+            if !quiet {
+                eprintln!("Syncing started");
+            }
             let result = cg.sync()?;
             if !quiet {
                 print_index_result(&result);
+            }
+            if !result.success {
+                std::process::exit(1);
             }
         }
         Command::Status { path, json } => {
@@ -639,20 +652,58 @@ fn resolve_root(path: Option<PathBuf>) -> Result<PathBuf> {
 }
 
 fn print_index_result(result: &codegraph::types::IndexResult) {
-    println!(
-        "Indexed {} files, skipped {}, deleted {}, {} nodes, {} edges in {}ms",
-        result.files_indexed,
-        result.files_skipped,
-        result.files_deleted,
-        result.nodes_created,
-        result.edges_created,
-        result.duration_ms
-    );
+    let indexed = humanize_count(result.files_indexed, "file");
+    let skipped = if result.files_skipped > 0 {
+        format!(", {} skipped", humanize_count(result.files_skipped, "file"))
+    } else {
+        String::new()
+    };
+    let deleted = if result.files_deleted > 0 {
+        format!(", {} deleted", humanize_count(result.files_deleted, "file"))
+    } else {
+        String::new()
+    };
+    let errored = if result.files_errored > 0 {
+        format!(", {} errored", humanize_count(result.files_errored, "file"))
+    } else {
+        String::new()
+    };
+    let nodes = humanize_count(result.nodes_created, "node");
+    let edges = humanize_count(result.edges_created, "edge");
+    let duration = humanize_duration(result.duration_ms);
+
+    println!("Indexed {indexed}{skipped}{deleted}{errored}, {nodes}, {edges} in {duration}");
+
     if !result.errors.is_empty() {
         eprintln!("Errors:");
         for err in &result.errors {
-            eprintln!("  {err}");
+            eprintln!("  [{}] {}: {}", err.category, err.path, err.message);
         }
+    }
+}
+
+fn humanize_duration(ms: i64) -> String {
+    if ms < 1000 {
+        format!("{ms}ms")
+    } else if ms < 60_000 {
+        let secs = ms as f64 / 1000.0;
+        format!("{secs:.1}s")
+    } else {
+        let mins = ms / 60_000;
+        let secs = (ms % 60_000) / 1000;
+        if secs == 0 {
+            format!("{mins}m")
+        } else {
+            format!("{mins}m {secs}s")
+        }
+    }
+}
+
+fn humanize_count(count: i64, noun: &str) -> String {
+    if count == 1 {
+        format!("1 {noun}")
+    } else {
+        format!("{count} {noun}s")
     }
 }
 
