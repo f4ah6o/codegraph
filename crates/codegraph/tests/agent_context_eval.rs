@@ -114,6 +114,41 @@ fn search_ranking_prefers_exact_symbol_matches() {
 }
 
 #[test]
+fn explore_report_groups_source_relationships_and_budget() {
+    let dir = TempDir::new().unwrap();
+    write_eval_fixture(dir.path());
+
+    let mut cg = CodeGraph::init(dir.path()).unwrap();
+    let index = cg.index_all().unwrap();
+    assert!(index.success, "{:?}", index.errors);
+
+    let report = cg
+        .build_explore_report("evict_expired CacheStore", 2)
+        .unwrap();
+    assert!(
+        report
+            .source_files
+            .iter()
+            .any(|file| file.path == "src/cache.rs"
+                && file
+                    .sections
+                    .iter()
+                    .any(|section| section.symbol == "evict_expired"
+                        && section.code.contains("CachePolicy::EvictExpired"))),
+        "{report:?}"
+    );
+    assert!(
+        report.budget_guidance.contains("Small project"),
+        "{report:?}"
+    );
+    assert!(
+        report.source_files.len() <= 2,
+        "source files should respect max_files: {report:?}"
+    );
+    assert!(!report.truncated, "{report:?}");
+}
+
+#[test]
 fn affected_uses_rust_test_name_heuristic() {
     let dir = TempDir::new().unwrap();
     fs::create_dir_all(dir.path().join("tokio/src/task")).unwrap();

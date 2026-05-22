@@ -416,6 +416,50 @@ pub struct ContextSymbolSummary {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ExploreReport {
+    pub query: String,
+    pub max_files: usize,
+    pub budget_guidance: String,
+    pub source_files: Vec<ExploreSourceFile>,
+    pub relationships: Vec<ExploreRelationship>,
+    pub additional_files: Vec<String>,
+    pub warnings: Vec<String>,
+    pub truncated: bool,
+    pub truncated_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExploreSourceFile {
+    pub path: String,
+    pub language: Language,
+    pub sections: Vec<ExploreSourceSection>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExploreSourceSection {
+    pub symbol: String,
+    pub kind: NodeKind,
+    pub start_line: i64,
+    pub end_line: i64,
+    pub reason: String,
+    pub code: String,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExploreRelationship {
+    pub source: String,
+    pub target: String,
+    pub kind: EdgeKind,
+    pub file_path: String,
+    pub direction: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AffectedReport {
     pub changed_files: Vec<String>,
     pub affected_tests: Vec<String>,

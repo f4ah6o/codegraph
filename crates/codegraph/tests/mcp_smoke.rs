@@ -8,7 +8,11 @@ use tempfile::TempDir;
 fn mcp_lists_and_calls_status() {
     let dir = TempDir::new().unwrap();
     fs::create_dir_all(dir.path().join("src")).unwrap();
-    fs::write(dir.path().join("src/lib.rs"), "pub fn process_data() {}\n").unwrap();
+    fs::write(
+        dir.path().join("src/lib.rs"),
+        "pub fn helper() {}\npub fn process_data() { helper(); }\n",
+    )
+    .unwrap();
     fs::write(
         dir.path().join("src/lib.test.rs"),
         "pub fn test_process_data() {}\n",
@@ -134,6 +138,23 @@ fn mcp_lists_and_calls_status() {
             })
         )
         .unwrap();
+        writeln!(
+            stdin,
+            "{}",
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 8,
+                "method": "tools/call",
+                "params": {
+                    "name": "codegraph_explore",
+                    "arguments": {
+                        "query": "process_data",
+                        "maxFiles": 2
+                    }
+                }
+            })
+        )
+        .unwrap();
     }
 
     drop(child.stdin.take());
@@ -189,4 +210,17 @@ fn mcp_lists_and_calls_status() {
     assert!(files_text.contains("src/"), "{files_text}");
     assert!(files_text.contains("lib.rs (rust"), "{files_text}");
     assert!(files_text.contains("bytes"), "{files_text}");
+    let explore_text = responses[7]["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap();
+    assert!(
+        explore_text.contains("## Source Sections"),
+        "{explore_text}"
+    );
+    assert!(
+        explore_text.contains("## Relationship Map"),
+        "{explore_text}"
+    );
+    assert!(explore_text.contains("Budget:"), "{explore_text}");
+    assert!(explore_text.contains("process_data"), "{explore_text}");
 }

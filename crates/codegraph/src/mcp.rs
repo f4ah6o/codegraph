@@ -291,13 +291,9 @@ impl MCPServer {
                     args.get("maxFiles").and_then(Value::as_i64).unwrap_or(12),
                     1,
                     20,
-                );
-                let mut text = cg.build_context(query, max_files * 5, true)?;
-                if text.len() > 35_000 {
-                    text.truncate(35_000);
-                    text.push_str("\n\n[truncated]");
-                }
-                Ok(text_result(text))
+                ) as usize;
+                let report = cg.build_explore_report(query, max_files)?;
+                Ok(text_result(format_explore_report(&report, 35_000)))
             }
             "codegraph_status" => {
                 let stats = cg.stats()?;
@@ -407,8 +403,8 @@ fn tools() -> Value {
         ),
         tool(
             "codegraph_explore",
-            "Deep exploration tool for a topic.",
-            json!({"query": {"type":"string"}, "maxFiles": {"type":"number"}, "projectPath": {"type":"string"}}),
+            "Deep exploration tool for a topic. Returns grouped source sections, relationship map, additional relevant files, and truncation notices. Budget guidance: small projects usually need 1-2 calls; medium projects need a few targeted calls; large projects should use narrow symbol/file queries.",
+            json!({"query": {"type":"string"}, "maxFiles": {"type":"number", "minimum": 1, "maximum": 20}, "projectPath": {"type":"string"}}),
             vec!["query"]
         ),
         tool(
@@ -627,6 +623,85 @@ fn push_tree_entry(entry: &crate::types::FileTreeEntry, depth: usize, lines: &mu
             line.push_str(&format!(", {size} bytes"));
         }
         lines.push(line);
+    }
+}
+
+fn format_explore_report(report: &crate::types::ExploreReport, max_chars: usize) -> String {
+    let mut out = format!(
+        "## Explore: {}\n\nBudget: {}\n\n",
+        report.query, report.budget_guidance
+    );
+
+    if report.source_files.is_empty() {
+        out.push_str("No matching source sections found.\n");
+    } else {
+        out.push_str("## Source Sections\n");
+        for file in &report.source_files {
+            out.push_str(&format!("\n### {} ({})\n", file.path, file.language));
+            for section in &file.sections {
+                out.push_str(&format!(
+                    "- `{}` `{}` lines {}-{}: {}\n\n```{}\n",
+                    section.kind,
+                    section.symbol,
+                    section.start_line,
+                    section.end_line,
+                    section.reason,
+                    file.language.as_str()
+                ));
+                out.push_str(&section.code);
+                if !section.code.ends_with('\n') {
+                    out.push('\n');
+                }
+                out.push_str("```\n");
+                if section.truncated {
+                    out.push_str("[section truncated]\n");
+                }
+            }
+        }
+    }
+
+    if !report.relationships.is_empty() {
+        out.push_str("\n## Relationship Map\n");
+        for relationship in &report.relationships {
+            out.push_str(&format!(
+                "- {} `{}` --{}--> `{}` ({})\n",
+                relationship.direction,
+                relationship.source,
+                relationship.kind,
+                relationship.target,
+                relationship.file_path
+            ));
+        }
+    }
+
+    if !report.additional_files.is_empty() {
+        out.push_str("\n## Additional Relevant Files\n");
+        for file in &report.additional_files {
+            out.push_str(&format!("- `{file}`\n"));
+        }
+    }
+
+    if !report.warnings.is_empty() {
+        out.push_str("\n## Warnings\n");
+        for warning in &report.warnings {
+            out.push_str(&format!("- {warning}\n"));
+        }
+    }
+
+    if report.truncated {
+        out.push_str("\n[truncated]");
+        if let Some(reason) = &report.truncated_reason {
+            out.push(' ');
+            out.push_str(reason);
+        }
+    }
+
+    if out.chars().count() > max_chars {
+        let mut bounded = out.chars().take(max_chars).collect::<String>();
+        bounded.push_str("\n\n[truncated] MCP response exceeded text budget.");
+        bounded
+    } else {
+        out
     }
 }
 

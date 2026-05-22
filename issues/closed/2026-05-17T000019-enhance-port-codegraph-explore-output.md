@@ -1,6 +1,7 @@
 # Port codegraph explore output
 
 Created: 2026-05-17
+Completed: 2026-05-22
 Model: GPT-5 Codex
 
 ## 背景
@@ -26,3 +27,10 @@ original の `codegraph_explore` は deep exploration 用に source sections、r
 - MCP smoke test
 - `cargo test --all --all-features`
 
+## 解決方法
+
+- `CodeGraph::build_explore_report` と explore report 型を追加し、query に関連する source sections を file ごとに grouping して返せるようにした。
+- call/reference relationship から relationship map と additional relevant files を生成し、source file 数、section size、relationship 数を bounded に扱うようにした。
+- project file count に応じた explore budget guidance と truncation 表示を report/MCP 出力に含めた。
+- MCP `codegraph_explore` を新しい explore report formatter に切り替え、tool description に project size 別の呼び出し guidance と maxFiles bounds を反映した。
+- context/explore fixture test と MCP smoke test を更新し、`cargo test --all --all-features` で確認した。

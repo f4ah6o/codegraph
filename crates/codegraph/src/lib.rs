@@ -16,7 +16,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use types::{
     AffectedDebugEntry, AffectedMatchSources, AffectedReport, ContextFileSummary, ContextMatch,
-    ContextReport, ContextSymbolSummary, FileLanguageGroup, FileListEntry, FileListFormat,
+    ContextReport, ContextSymbolSummary, EdgeKind, ExploreRelationship, ExploreReport,
+    ExploreSourceFile, ExploreSourceSection, FileLanguageGroup, FileListEntry, FileListFormat,
     FileListOptions, FileListReport, FileRecord, FileTreeEntry, GraphPath, GraphStats, IndexResult,
     Language, Node, NodeEdge, SearchOptions, SearchResult,
 };
@@ -418,6 +419,143 @@ impl CodeGraph {
         })
     }
 
+    pub fn build_explore_report(&self, query: &str, max_files: usize) -> Result<ExploreReport> {
+        let max_files = max_files.clamp(1, 20);
+        let stats = self.stats()?;
+        let max_nodes = (max_files as i64 * 6).clamp(6, 120);
+        let context = self.build_context_report(query, max_nodes, true)?;
+        let mut source_files: BTreeMap<String, ExploreSourceFile> = BTreeMap::new();
+        let mut relationships = Vec::new();
+        let mut additional_files = BTreeSet::new();
+        let mut seen_relationships = BTreeSet::new();
+        let mut truncated = false;
+        let mut warnings = context.warnings.clone();
+
+        for matched in &context.matches {
+            let file = source_files
+                .entry(matched.node.file_path.clone())
+                .or_insert_with(|| ExploreSourceFile {
+                    path: matched.node.file_path.clone(),
+                    language: matched.node.language,
+                    sections: Vec::new(),
+                });
+            if file.sections.len() < 4 {
+                let (code, section_truncated) =
+                    bounded_source_section(matched.code.as_deref().unwrap_or_default(), 4_000);
+                truncated |= section_truncated;
+                file.sections.push(ExploreSourceSection {
+                    symbol: matched.node.name.clone(),
+                    kind: matched.node.kind,
+                    start_line: matched.node.start_line,
+                    end_line: matched.node.end_line,
+                    reason: matched.reason.clone(),
+                    code,
+                    truncated: section_truncated,
+                });
+            } else {
+                truncated = true;
+            }
+
+            self.collect_explore_relationships(
+                &matched.node,
+                &mut relationships,
+                &mut seen_relationships,
+                &mut additional_files,
+            )?;
+        }
+
+        let mut source_files = source_files.into_values().collect::<Vec<_>>();
+        source_files.sort_by(|a, b| a.path.cmp(&b.path));
+        if source_files.len() > max_files {
+            for file in source_files.drain(max_files..) {
+                additional_files.insert(file.path);
+            }
+            truncated = true;
+        }
+
+        let source_paths = source_files
+            .iter()
+            .map(|file| file.path.as_str())
+            .collect::<BTreeSet<_>>();
+        let additional_files = additional_files
+            .into_iter()
+            .filter(|file| !source_paths.contains(file.as_str()))
+            .take(max_files)
+            .collect::<Vec<_>>();
+
+        relationships.sort_by(|a, b| {
+            a.file_path
+                .cmp(&b.file_path)
+                .then_with(|| a.source.cmp(&b.source))
+                .then_with(|| a.kind.as_str().cmp(b.kind.as_str()))
+                .then_with(|| a.target.cmp(&b.target))
+        });
+        if relationships.len() > max_files * 4 {
+            relationships.truncate(max_files * 4);
+            truncated = true;
+        }
+
+        if truncated {
+            warnings.push("Explore output was truncated to fit the configured source and relationship budgets.".to_string());
+        }
+
+        Ok(ExploreReport {
+            query: context.query,
+            max_files,
+            budget_guidance: explore_budget_guidance(stats.file_count),
+            source_files,
+            relationships,
+            additional_files,
+            warnings,
+            truncated,
+            truncated_reason: truncated.then(|| {
+                "Some source sections, files, or relationships exceeded the explore budget."
+                    .to_string()
+            }),
+        })
+    }
+
+    fn collect_explore_relationships(
+        &self,
+        node: &Node,
+        relationships: &mut Vec<ExploreRelationship>,
+        seen: &mut BTreeSet<String>,
+        additional_files: &mut BTreeSet<String>,
+    ) -> Result<()> {
+        for edge in self.get_callees(&node.id, 1)?.into_iter().take(4) {
+            if edge.edge.kind != EdgeKind::Contains {
+                push_explore_relationship(
+                    node,
+                    edge,
+                    "outgoing",
+                    relationships,
+                    seen,
+                    additional_files,
+                );
+            }
+        }
+        for edge in self.get_callers(&node.id, 1)?.into_iter().take(4) {
+            if edge.edge.kind != EdgeKind::Contains {
+                push_explore_relationship(
+                    node,
+                    edge,
+                    "incoming",
+                    relationships,
+                    seen,
+                    additional_files,
+                );
+            }
+        }
+        for file in self
+            .get_file_dependents(&node.file_path)?
+            .into_iter()
+            .take(4)
+        {
+            additional_files.insert(file);
+        }
+        Ok(())
+    }
+
     fn find_context_nodes(
         &self,
         search_terms: &[String],
@@ -613,6 +751,62 @@ fn file_pattern_matches(pattern: &str, path: &str) -> bool {
         return pattern.ends_with('*') || parts.last().is_some_and(|suffix| path.ends_with(suffix));
     }
     path.contains(pattern)
+}
+
+fn bounded_source_section(source: &str, max_chars: usize) -> (String, bool) {
+    if source.chars().count() <= max_chars {
+        return (source.to_string(), false);
+    }
+    let mut out = source.chars().take(max_chars).collect::<String>();
+    out.push_str("\n// [section truncated]");
+    (out, true)
+}
+
+fn push_explore_relationship(
+    root: &Node,
+    edge: NodeEdge,
+    direction: &str,
+    relationships: &mut Vec<ExploreRelationship>,
+    seen: &mut BTreeSet<String>,
+    additional_files: &mut BTreeSet<String>,
+) {
+    let key = format!(
+        "{}:{}:{}",
+        edge.edge.source,
+        edge.edge.kind.as_str(),
+        edge.edge.target
+    );
+    if !seen.insert(key) {
+        return;
+    }
+    if edge.node.file_path != root.file_path {
+        additional_files.insert(edge.node.file_path.clone());
+    }
+    let (source, target) = if direction == "outgoing" {
+        (root.name.clone(), edge.node.name.clone())
+    } else {
+        (edge.node.name.clone(), root.name.clone())
+    };
+    relationships.push(ExploreRelationship {
+        source,
+        target,
+        kind: edge.edge.kind,
+        file_path: edge.node.file_path,
+        direction: direction.to_string(),
+    });
+}
+
+fn explore_budget_guidance(file_count: i64) -> String {
+    match file_count {
+        0..=50 => "Small project: one or two focused explore calls should usually be enough.",
+        51..=250 => {
+            "Medium project: use a few targeted explore calls around concrete symbols or files."
+        }
+        _ => {
+            "Large project: keep explore calls narrow and follow up by file, symbol, or subsystem."
+        }
+    }
+    .to_string()
 }
 
 fn context_search_terms(task: &str) -> Vec<String> {
