@@ -1,6 +1,7 @@
 # Port Java and Kotlin extraction
 
 Created: 2026-05-17
+Completed: 2026-05-22
 Model: GPT-5 Codex
 
 ## 背景
@@ -24,3 +25,9 @@ original は Java/Kotlin の classes、interfaces、methods、imports、annotati
 - Java/Kotlin fixture tests
 - `cargo test --all --all-features`
 
+## 解決方法
+
+- Java/Kotlin 専用 extractor を registry に追加し、generic extraction から分離した。
+- Java/Kotlin の class、interface、method、Kotlin top-level function を抽出し、Kotlin `suspend` は async metadata として保持した。
+- import、extends、implements、Kotlin supertype、annotation を unresolved refs として記録した。
+- Java/Kotlin fixture tests を追加し、`cargo test --all --all-features` で確認した。

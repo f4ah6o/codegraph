@@ -25,6 +25,7 @@ const RUST_LANGUAGES: &[Language] = &[Language::Rust];
 const MOONBIT_LANGUAGES: &[Language] = &[Language::MoonBit];
 const PYTHON_LANGUAGES: &[Language] = &[Language::Python];
 const GO_LANGUAGES: &[Language] = &[Language::Go];
+const JAVA_KOTLIN_LANGUAGES: &[Language] = &[Language::Java, Language::Kotlin];
 const TYPESCRIPT_JAVASCRIPT_LANGUAGES: &[Language] = &[
     Language::TypeScript,
     Language::Tsx,
@@ -32,14 +33,12 @@ const TYPESCRIPT_JAVASCRIPT_LANGUAGES: &[Language] = &[
     Language::Jsx,
 ];
 const GENERIC_LANGUAGES: &[Language] = &[
-    Language::Java,
     Language::C,
     Language::Cpp,
     Language::CSharp,
     Language::Php,
     Language::Ruby,
     Language::Swift,
-    Language::Kotlin,
     Language::Dart,
     Language::Svelte,
     Language::Vue,
@@ -74,6 +73,11 @@ const LANGUAGE_EXTRACTORS: &[LanguageExtractor] = &[
         name: "go",
         languages: GO_LANGUAGES,
         extract: extract_go_entry,
+    },
+    LanguageExtractor {
+        name: "java_kotlin",
+        languages: JAVA_KOTLIN_LANGUAGES,
+        extract: extract_java_kotlin_entry,
     },
     LanguageExtractor {
         name: "generic",
@@ -271,6 +275,18 @@ fn extract_go_entry(
     refs: &mut Vec<UnresolvedReference>,
 ) {
     extract_go(file_path, source, now, nodes, edges, refs);
+}
+
+fn extract_java_kotlin_entry(
+    file_path: &str,
+    source: &str,
+    language: Language,
+    now: i64,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+    refs: &mut Vec<UnresolvedReference>,
+) {
+    extract_java_kotlin(file_path, source, language, now, nodes, edges, refs);
 }
 
 fn extract_generic_entry(
@@ -941,6 +957,314 @@ fn add_go_call_refs(
                 0,
             );
         }
+    }
+}
+
+fn extract_java_kotlin(
+    file_path: &str,
+    source: &str,
+    language: Language,
+    now: i64,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+    refs: &mut Vec<UnresolvedReference>,
+) {
+    add_java_kotlin_imports(file_path, source, language, now, nodes, edges, refs);
+    add_java_kotlin_types_and_members(file_path, source, language, now, nodes, edges, refs);
+    add_call_refs(
+        file_path,
+        source,
+        language,
+        nodes,
+        refs,
+        r"([A-Za-z_][A-Za-z0-9_\.]*)\s*\(",
+    );
+}
+
+fn add_java_kotlin_imports(
+    file_path: &str,
+    source: &str,
+    language: Language,
+    now: i64,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+    refs: &mut Vec<UnresolvedReference>,
+) {
+    let re =
+        Regex::new(r"(?m)^\s*import\s+(?:static\s+)?([A-Za-z_][A-Za-z0-9_\.\*]*)\s*;?").unwrap();
+    for cap in re.captures_iter(source) {
+        let module = cap.get(1).unwrap();
+        let node = make_node(
+            file_path,
+            language,
+            NodeKind::Import,
+            module.as_str(),
+            line_for(source, module.start()),
+            0,
+            now,
+            cap.get(0).map(|m| m.as_str().trim().to_string()),
+        );
+        add_contains(nodes, edges, &node);
+        refs_push(
+            refs,
+            &nodes[0].id,
+            module.as_str(),
+            EdgeKind::Imports,
+            file_path,
+            language,
+            node.start_line,
+            0,
+        );
+        nodes.push(node);
+    }
+}
+
+fn add_java_kotlin_types_and_members(
+    file_path: &str,
+    source: &str,
+    language: Language,
+    now: i64,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+    refs: &mut Vec<UnresolvedReference>,
+) {
+    let type_re = Regex::new(
+        r"^\s*(?:(public|private|protected|internal)\s+)?(?:(?:data|abstract|open|final|sealed|enum)\s+)*(class|interface|enum)\s+([A-Za-z_][A-Za-z0-9_]*)([^{]*)\{?",
+    )
+    .unwrap();
+    let java_method_re = Regex::new(
+        r"^\s*(?:(public|private|protected)\s+)?((?:static|final|abstract|synchronized)\s+)*(?:[A-Za-z_][A-Za-z0-9_<>,\.\?\[\]\s]*\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\([^;{}]*\)\s*(?:throws\s+[A-Za-z0-9_,\.\s]+)?\{?",
+    )
+    .unwrap();
+    let kotlin_fun_re = Regex::new(
+        r"^\s*(?:(public|private|protected|internal)\s+)?((?:suspend|inline|open|override|private|public|protected|internal)\s+)*fun\s+(?:(?P<receiver>[A-Za-z_][A-Za-z0-9_\.]*)\.)?(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*\([^)]*\)\s*(?::\s*[A-Za-z_][A-Za-z0-9_<>,\.\?\s]*)?",
+    )
+    .unwrap();
+    let annotation_re = Regex::new(r"^\s*@([A-Za-z_][A-Za-z0-9_\.]*)").unwrap();
+    let mut type_stack: Vec<(usize, String, String)> = Vec::new();
+    let mut pending_annotations: Vec<(String, i64)> = Vec::new();
+
+    for (idx, line) in source.lines().enumerate() {
+        let line_no = idx as i64 + 1;
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with("//") {
+            continue;
+        }
+        let indent = python_indent_width(line);
+        while type_stack
+            .last()
+            .is_some_and(|(type_indent, _, _)| indent <= *type_indent && trimmed.starts_with('}'))
+        {
+            type_stack.pop();
+        }
+
+        if let Some(cap) = annotation_re.captures(line) {
+            pending_annotations.push((cap[1].to_string(), line_no));
+            continue;
+        }
+
+        if let Some(cap) = type_re.captures(line) {
+            let keyword = cap.get(2).unwrap().as_str();
+            let kind = match keyword {
+                "interface" => NodeKind::Interface,
+                "enum" => NodeKind::Enum,
+                _ => NodeKind::Class,
+            };
+            let name = cap.get(3).unwrap();
+            let mut node = make_node(
+                file_path,
+                language,
+                kind,
+                name.as_str(),
+                line_no,
+                indent as i64,
+                now,
+                Some(java_kotlin_signature(&pending_annotations, trimmed)),
+            );
+            node.visibility = cap.get(1).map(|m| m.as_str().to_string());
+            node.is_exported = node
+                .visibility
+                .as_deref()
+                .map(|visibility| visibility == "public")
+                .unwrap_or(language == Language::Kotlin);
+            add_contains(nodes, edges, &node);
+            add_java_kotlin_metadata_refs(
+                &node.id,
+                cap.get(4).map(|m| m.as_str()).unwrap_or_default(),
+                &pending_annotations,
+                file_path,
+                language,
+                line_no,
+                refs,
+            );
+            type_stack.push((indent, name.as_str().to_string(), node.id.clone()));
+            nodes.push(node);
+            pending_annotations.clear();
+            continue;
+        }
+
+        let member = match language {
+            Language::Kotlin => kotlin_fun_re.captures(line).map(|cap| {
+                (
+                    cap.name("name").unwrap().as_str().to_string(),
+                    cap.name("receiver").map(|m| m.as_str().to_string()),
+                    cap.get(1).map(|m| m.as_str().to_string()),
+                    cap.get(2)
+                        .map(|m| m.as_str().contains("suspend"))
+                        .unwrap_or(false),
+                    cap.get(0).unwrap().as_str().trim().to_string(),
+                )
+            }),
+            _ => java_method_re.captures(line).and_then(|cap| {
+                let name = cap.get(3).unwrap().as_str();
+                let skip = matches!(
+                    name,
+                    "if" | "for" | "while" | "switch" | "catch" | "return" | "new"
+                );
+                (!skip).then(|| {
+                    (
+                        name.to_string(),
+                        None,
+                        cap.get(1).map(|m| m.as_str().to_string()),
+                        false,
+                        cap.get(0).unwrap().as_str().trim().to_string(),
+                    )
+                })
+            }),
+        };
+        if let Some((name, receiver, visibility, is_async, signature)) = member {
+            let kind = if type_stack.is_empty() && language == Language::Kotlin {
+                NodeKind::Function
+            } else {
+                NodeKind::Method
+            };
+            let mut node = make_node(
+                file_path,
+                language,
+                kind,
+                &name,
+                line_no,
+                indent as i64,
+                now,
+                Some(java_kotlin_signature(&pending_annotations, &signature)),
+            );
+            node.visibility = visibility;
+            node.is_exported = node
+                .visibility
+                .as_deref()
+                .map(|visibility| visibility == "public")
+                .unwrap_or(language == Language::Kotlin);
+            node.is_async = is_async;
+            node.is_static = signature.contains(" static ");
+            if let Some(receiver) =
+                receiver.or_else(|| type_stack.last().map(|(_, name, _)| name.clone()))
+            {
+                node.qualified_name = format!("{}.{}", receiver, name);
+            }
+            if let Some((_, _, parent_id)) = type_stack.last() {
+                edges.push(Edge {
+                    id: None,
+                    source: parent_id.clone(),
+                    target: node.id.clone(),
+                    kind: EdgeKind::Contains,
+                    line: None,
+                    col: None,
+                    provenance: Some(language.as_str().into()),
+                });
+            } else {
+                add_contains(nodes, edges, &node);
+            }
+            for (annotation, annotation_line) in &pending_annotations {
+                refs_push(
+                    refs,
+                    &node.id,
+                    annotation,
+                    EdgeKind::Decorates,
+                    file_path,
+                    language,
+                    *annotation_line,
+                    0,
+                );
+            }
+            nodes.push(node);
+            pending_annotations.clear();
+            continue;
+        }
+
+        pending_annotations.clear();
+    }
+}
+
+fn java_kotlin_signature(annotations: &[(String, i64)], declaration: &str) -> String {
+    if annotations.is_empty() {
+        declaration.to_string()
+    } else {
+        let mut lines: Vec<String> = annotations
+            .iter()
+            .map(|(annotation, _)| format!("@{}", annotation))
+            .collect();
+        lines.push(declaration.to_string());
+        lines.join("\n")
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn add_java_kotlin_metadata_refs(
+    node_id: &str,
+    tail: &str,
+    annotations: &[(String, i64)],
+    file_path: &str,
+    language: Language,
+    line: i64,
+    refs: &mut Vec<UnresolvedReference>,
+) {
+    let extends_re = Regex::new(r"\bextends\s+([A-Za-z_][A-Za-z0-9_\.]*)").unwrap();
+    let implements_re = Regex::new(r"\bimplements\s+([A-Za-z_][A-Za-z0-9_\.,\s]*)").unwrap();
+    let kotlin_super_re = Regex::new(r":\s*([A-Za-z_][A-Za-z0-9_\.]*)").unwrap();
+    if let Some(cap) = extends_re
+        .captures(tail)
+        .or_else(|| kotlin_super_re.captures(tail))
+    {
+        refs_push(
+            refs,
+            node_id,
+            cap.get(1).unwrap().as_str(),
+            EdgeKind::Extends,
+            file_path,
+            language,
+            line,
+            0,
+        );
+    }
+    if let Some(cap) = implements_re.captures(tail) {
+        for name in cap[1]
+            .split(',')
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+        {
+            refs_push(
+                refs,
+                node_id,
+                name,
+                EdgeKind::Implements,
+                file_path,
+                language,
+                line,
+                0,
+            );
+        }
+    }
+    for (annotation, annotation_line) in annotations {
+        refs_push(
+            refs,
+            node_id,
+            annotation,
+            EdgeKind::Decorates,
+            file_path,
+            language,
+            *annotation_line,
+            0,
+        );
     }
 }
 

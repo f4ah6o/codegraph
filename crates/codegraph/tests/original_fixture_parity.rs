@@ -18,6 +18,8 @@ fn harness_can_assert_extractor_registry_dispatch() {
     );
     assert_eq!(registered_extractor_name(Language::Python), "python");
     assert_eq!(registered_extractor_name(Language::Go), "go");
+    assert_eq!(registered_extractor_name(Language::Java), "java_kotlin");
+    assert_eq!(registered_extractor_name(Language::Kotlin), "java_kotlin");
 }
 
 #[test]
@@ -258,6 +260,98 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
         .signature
         .as_deref()
         .is_some_and(|signature| signature.starts_with("import alias")));
+}
+
+#[test]
+fn harness_extracts_java_symbols_annotations_inheritance_and_imports() {
+    let fixture = OriginalSourceFixture::new(
+        "PaymentController.java",
+        r#"
+package app;
+
+import java.util.List;
+import static java.util.Collections.emptyList;
+
+@RestController
+public class PaymentController extends BaseController implements Handler, Auditable {
+    @GetMapping("/payments")
+    public static List<String> listPayments() {
+        return emptyList();
+    }
+}
+"#,
+    );
+
+    assert_eq!(fixture.language(), Language::Java);
+    fixture.assert_exported_node(NodeKind::Class, "PaymentController");
+    fixture.assert_node(NodeKind::Method, "listPayments");
+    fixture.assert_node(NodeKind::Import, "java.util.List");
+    fixture.assert_node(NodeKind::Import, "java.util.Collections.emptyList");
+    fixture.assert_reference(EdgeKind::Imports, "java.util.List");
+    fixture.assert_reference(EdgeKind::Imports, "java.util.Collections.emptyList");
+    fixture.assert_reference(EdgeKind::Extends, "BaseController");
+    fixture.assert_reference(EdgeKind::Implements, "Handler");
+    fixture.assert_reference(EdgeKind::Implements, "Auditable");
+    fixture.assert_reference(EdgeKind::Decorates, "RestController");
+    fixture.assert_reference(EdgeKind::Decorates, "GetMapping");
+    fixture.assert_reference(EdgeKind::Calls, "emptyList");
+
+    let method = fixture
+        .result()
+        .nodes
+        .iter()
+        .find(|node| node.kind == NodeKind::Method && node.name == "listPayments")
+        .unwrap();
+    assert!(method.is_static);
+    assert_eq!(method.visibility.as_deref(), Some("public"));
+    assert_eq!(method.qualified_name, "PaymentController.listPayments");
+}
+
+#[test]
+fn harness_extracts_kotlin_symbols_suspend_annotations_and_imports() {
+    let fixture = OriginalSourceFixture::new(
+        "PaymentService.kt",
+        r#"
+package app
+
+import kotlinx.coroutines.Dispatchers
+import app.routes.*
+
+@Service
+class PaymentService : BaseService {
+    @GetMapping("/payments")
+    suspend fun listPayments(): List<String> {
+        return fetchPayments()
+    }
+}
+
+fun helperName(value: String): String {
+    return value.trim()
+}
+"#,
+    );
+
+    assert_eq!(fixture.language(), Language::Kotlin);
+    fixture.assert_exported_node(NodeKind::Class, "PaymentService");
+    fixture.assert_node(NodeKind::Method, "listPayments");
+    fixture.assert_node(NodeKind::Function, "helperName");
+    fixture.assert_node(NodeKind::Import, "kotlinx.coroutines.Dispatchers");
+    fixture.assert_node(NodeKind::Import, "app.routes.*");
+    fixture.assert_reference(EdgeKind::Imports, "kotlinx.coroutines.Dispatchers");
+    fixture.assert_reference(EdgeKind::Imports, "app.routes.*");
+    fixture.assert_reference(EdgeKind::Extends, "BaseService");
+    fixture.assert_reference(EdgeKind::Decorates, "Service");
+    fixture.assert_reference(EdgeKind::Decorates, "GetMapping");
+    fixture.assert_reference(EdgeKind::Calls, "fetchPayments");
+
+    let method = fixture
+        .result()
+        .nodes
+        .iter()
+        .find(|node| node.kind == NodeKind::Method && node.name == "listPayments")
+        .unwrap();
+    assert!(method.is_async);
+    assert_eq!(method.qualified_name, "PaymentService.listPayments");
 }
 
 #[test]
