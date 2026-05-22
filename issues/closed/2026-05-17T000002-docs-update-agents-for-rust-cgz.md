@@ -26,3 +26,15 @@ Model: GPT-5 Codex
 - `rg -n "npm|TypeScript|original-codegraph|cargo|cgz" AGENTS.md`
 - `cargo test --all --all-features`
 
+## 解決方法
+
+Completed: 2026-05-22
+
+`AGENTS.md` が Rust workspace / crate / CLI / library API / Rust release workflow /
+branch policy / local issue workflow を中心に説明していることを確認した。`main` は
+canonical Rust `cgz` branch、`original-codegraph/main` は port 元 reference としてのみ
+扱い自動 merge しない方針も明記済みである。
+
+不足していた issue 完了時の手順を補い、通常の issue でも「## 解決方法」を追記して
+`git mv` で `issues/closed/` へ移動し、1 issue 1 commit にまとめることを明記した。
+`CLAUDE.md` は `AGENTS.md` への導線と Rust `cgz` の要点に限定されているため変更不要とした。

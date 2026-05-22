@@ -130,6 +130,8 @@ gh release create vX.Y.Z \
 - Issue の完了日はファイルのタイトルの後に `Completed: YYYY-MM-DD` として記載すること
 - Issue を作成した LLM の Model と Version をファイルのタイトルの後に `Model: <model-name> <version>` として記載すること
 - Issue はなぜこの対応が必要なのかの根拠を明確にすること
+- Issue を完了するときは「## 解決方法」セクションを追記し、何をどう実装・修正・確認したかを記載すること
+- Issue を完了したら `git mv` で `issues/closed/` へ移動し、その issue の変更だけを 1 commit にまとめること
 
 ### issue が実は解決してなかった場合
 
