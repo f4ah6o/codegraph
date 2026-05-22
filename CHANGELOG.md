@@ -9,7 +9,21 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Unreleased
 
+## [2026.5.5] - 2026-05-23
+
+### Added
+- `cgz index`, `cgz sync`, and `cgz init -i` now report deterministic progress,
+  human-readable indexing summaries, categorized indexing errors, and non-zero
+  exits when indexing fails.
+- The agent context evaluation suite now tracks extraction coverage, search
+  recall/MRR, context recall, explore coverage, and affected-test heuristics
+  with controlled fixture tests.
+
 ### Changed
+- `cgz index --quiet` continues to suppress human-oriented progress while JSON
+  outputs remain machine-readable.
+- Evaluation documentation now describes development metrics and thresholds
+  instead of product claims.
 - `main` now contains the Rust `cgz` workspace only, with the original
   TypeScript CodeGraph implementation removed from the working tree.
 - Upstream TypeScript CodeGraph changes are tracked on `original-codegraph/main`
@@ -67,6 +81,7 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   chmod +x "$(npm root -g)/@colbymchenry/codegraph/dist/bin/codegraph.js"
   ```
 
+[2026.5.5]: https://github.com/f4ah6o/codegraph/releases/tag/v2026.5.5
 [2026.5.4]: https://github.com/f4ah6o/codegraph/releases/tag/v2026.5.4
 [2026.5.3]: https://github.com/f4ah6o/codegraph/releases/tag/v2026.5.3
 [2026.5.2]: https://github.com/f4ah6o/codegraph/releases/tag/v2026.5.2
