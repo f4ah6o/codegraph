@@ -23,6 +23,7 @@ struct LanguageExtractor {
 
 const RUST_LANGUAGES: &[Language] = &[Language::Rust];
 const MOONBIT_LANGUAGES: &[Language] = &[Language::MoonBit];
+const PYTHON_LANGUAGES: &[Language] = &[Language::Python];
 const TYPESCRIPT_JAVASCRIPT_LANGUAGES: &[Language] = &[
     Language::TypeScript,
     Language::Tsx,
@@ -30,7 +31,6 @@ const TYPESCRIPT_JAVASCRIPT_LANGUAGES: &[Language] = &[
     Language::Jsx,
 ];
 const GENERIC_LANGUAGES: &[Language] = &[
-    Language::Python,
     Language::Go,
     Language::Java,
     Language::C,
@@ -64,6 +64,11 @@ const LANGUAGE_EXTRACTORS: &[LanguageExtractor] = &[
         name: "typescript_javascript",
         languages: TYPESCRIPT_JAVASCRIPT_LANGUAGES,
         extract: extract_typescript_javascript_entry,
+    },
+    LanguageExtractor {
+        name: "python",
+        languages: PYTHON_LANGUAGES,
+        extract: extract_python_entry,
     },
     LanguageExtractor {
         name: "generic",
@@ -237,6 +242,18 @@ fn extract_typescript_javascript_entry(
     refs: &mut Vec<UnresolvedReference>,
 ) {
     extract_typescript_javascript(file_path, source, language, now, nodes, edges, refs);
+}
+
+fn extract_python_entry(
+    file_path: &str,
+    source: &str,
+    _language: Language,
+    now: i64,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+    refs: &mut Vec<UnresolvedReference>,
+) {
+    extract_python(file_path, source, now, nodes, edges, refs);
 }
 
 fn extract_generic_entry(
@@ -425,6 +442,244 @@ fn add_tsx_jsx_components(
         add_contains(nodes, edges, &node);
         nodes.push(node);
     }
+}
+
+fn extract_python(
+    file_path: &str,
+    source: &str,
+    now: i64,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+    refs: &mut Vec<UnresolvedReference>,
+) {
+    let class_re =
+        Regex::new(r"^([ \t]*)class\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s*\([^)]*\))?\s*:").unwrap();
+    let def_re = Regex::new(
+        r"^([ \t]*)(async\s+)?def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\([^)]*\)\s*(?:->\s*[^:]+)?\s*:",
+    )
+    .unwrap();
+    let decorator_re = Regex::new(r"^([ \t]*)@([A-Za-z_][A-Za-z0-9_\.]*)").unwrap();
+
+    let mut class_stack: Vec<(usize, String, String)> = Vec::new();
+    let mut pending_decorators: Vec<(usize, String, i64)> = Vec::new();
+
+    for (line_idx, line) in source.lines().enumerate() {
+        let line_no = line_idx as i64 + 1;
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+
+        let indent = python_indent_width(line);
+        while class_stack.last().is_some_and(|(class_indent, _, _)| {
+            indent <= *class_indent && !trimmed.starts_with('@')
+        }) {
+            class_stack.pop();
+        }
+        pending_decorators.retain(|(decorator_indent, _, _)| *decorator_indent == indent);
+
+        if let Some(cap) = decorator_re.captures(line) {
+            pending_decorators.push((indent, cap[2].to_string(), line_no));
+            continue;
+        }
+
+        if let Some(cap) = class_re.captures(line) {
+            let name = cap[2].to_string();
+            let node = make_node(
+                file_path,
+                Language::Python,
+                NodeKind::Class,
+                &name,
+                line_no,
+                indent as i64,
+                now,
+                Some(trimmed.to_string()),
+            );
+            add_contains(nodes, edges, &node);
+            class_stack.push((indent, name, node.id.clone()));
+            nodes.push(node);
+            pending_decorators.clear();
+            continue;
+        }
+
+        if let Some(cap) = def_re.captures(line) {
+            let name = cap[3].to_string();
+            let parent_class = class_stack
+                .iter()
+                .rev()
+                .find(|(class_indent, _, _)| indent > *class_indent);
+            let kind = if parent_class.is_some() {
+                NodeKind::Method
+            } else {
+                NodeKind::Function
+            };
+            let mut signature_lines: Vec<String> = pending_decorators
+                .iter()
+                .map(|(_, decorator, _)| format!("@{}", decorator))
+                .collect();
+            signature_lines.push(trimmed.to_string());
+            let mut node = make_node(
+                file_path,
+                Language::Python,
+                kind,
+                &name,
+                line_no,
+                indent as i64,
+                now,
+                Some(signature_lines.join("\n")),
+            );
+            node.is_async = cap.get(2).is_some();
+            node.is_static = pending_decorators
+                .iter()
+                .any(|(_, decorator, _)| decorator == "staticmethod");
+            if let Some((_, class_name, class_id)) = parent_class {
+                node.qualified_name = format!("{}.{}", class_name, name);
+                edges.push(Edge {
+                    id: None,
+                    source: class_id.clone(),
+                    target: node.id.clone(),
+                    kind: EdgeKind::Contains,
+                    line: None,
+                    col: None,
+                    provenance: Some("python".into()),
+                });
+            } else {
+                add_contains(nodes, edges, &node);
+            }
+
+            for (_, decorator, decorator_line) in &pending_decorators {
+                refs_push(
+                    refs,
+                    &node.id,
+                    decorator,
+                    EdgeKind::Decorates,
+                    file_path,
+                    Language::Python,
+                    *decorator_line,
+                    0,
+                );
+            }
+            nodes.push(node);
+            pending_decorators.clear();
+            continue;
+        }
+
+        extract_python_imports(file_path, line, line_no, now, nodes, edges, refs);
+        pending_decorators.clear();
+    }
+
+    add_call_refs(
+        file_path,
+        source,
+        Language::Python,
+        nodes,
+        refs,
+        r"([A-Za-z_][A-Za-z0-9_\.]*)\s*\(",
+    );
+}
+
+fn extract_python_imports(
+    file_path: &str,
+    line: &str,
+    line_no: i64,
+    now: i64,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+    refs: &mut Vec<UnresolvedReference>,
+) {
+    let import_re = Regex::new(r"^\s*import\s+(.+)$").unwrap();
+    let from_re = Regex::new(r"^\s*from\s+([A-Za-z_\.][A-Za-z0-9_\.]*)\s+import\s+(.+)$").unwrap();
+    let Some(file_id) = nodes.first().map(|node| node.id.clone()) else {
+        return;
+    };
+
+    if let Some(cap) = import_re.captures(line) {
+        for spec in cap[1]
+            .split(',')
+            .map(str::trim)
+            .filter(|spec| !spec.is_empty())
+        {
+            let module = spec.split_whitespace().next().unwrap_or(spec);
+            add_python_import_node(
+                file_path,
+                module,
+                line.trim(),
+                line_no,
+                now,
+                nodes,
+                edges,
+                refs,
+                &file_id,
+            );
+        }
+        return;
+    }
+
+    if let Some(cap) = from_re.captures(line) {
+        let module = cap[1].trim();
+        add_python_import_node(
+            file_path,
+            module,
+            line.trim(),
+            line_no,
+            now,
+            nodes,
+            edges,
+            refs,
+            &file_id,
+        );
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn add_python_import_node(
+    file_path: &str,
+    module: &str,
+    signature: &str,
+    line_no: i64,
+    now: i64,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+    refs: &mut Vec<UnresolvedReference>,
+    file_id: &str,
+) {
+    let node = make_node(
+        file_path,
+        Language::Python,
+        NodeKind::Import,
+        module,
+        line_no,
+        0,
+        now,
+        Some(signature.to_string()),
+    );
+    edges.push(Edge {
+        id: None,
+        source: file_id.to_string(),
+        target: node.id.clone(),
+        kind: EdgeKind::Contains,
+        line: None,
+        col: None,
+        provenance: Some("python".into()),
+    });
+    refs_push(
+        refs,
+        file_id,
+        module,
+        EdgeKind::Imports,
+        file_path,
+        Language::Python,
+        line_no,
+        0,
+    );
+    nodes.push(node);
+}
+
+fn python_indent_width(line: &str) -> usize {
+    line.chars()
+        .take_while(|ch| matches!(ch, ' ' | '\t'))
+        .map(|ch| if ch == '\t' { 4 } else { 1 })
+        .sum()
 }
 
 fn extract_rust(

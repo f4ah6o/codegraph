@@ -16,6 +16,7 @@ fn harness_can_assert_extractor_registry_dispatch() {
         registered_extractor_name(Language::JavaScript),
         "typescript_javascript"
     );
+    assert_eq!(registered_extractor_name(Language::Python), "python");
 }
 
 #[test]
@@ -114,6 +115,69 @@ export const fetchData = async () => {
 
     js.assert_exported_node(NodeKind::Function, "fetchData");
     js.assert_reference(EdgeKind::Calls, "fetch");
+}
+
+#[test]
+fn harness_extracts_python_symbols_decorators_and_imports() {
+    let fixture = OriginalSourceFixture::new(
+        "views.py",
+        r#"
+from .utils import helper
+from typing import List, Dict, Optional
+from typing import *
+import json
+import numpy as np
+
+class Cart:
+    @staticmethod
+    def tax_rate():
+        return 0.1
+
+    @app.get("/items/{item_id}")
+    async def fetch_item(self, item_id: str) -> dict:
+        return helper(item_id)
+
+def calculate_total(items: list, tax_rate: float) -> float:
+    return sum(items) * tax_rate
+"#,
+    );
+
+    assert_eq!(fixture.language(), Language::Python);
+    fixture.assert_node(NodeKind::Class, "Cart");
+    fixture.assert_node(NodeKind::Method, "tax_rate");
+    fixture.assert_node(NodeKind::Method, "fetch_item");
+    fixture.assert_node(NodeKind::Function, "calculate_total");
+    fixture.assert_node(NodeKind::Import, ".utils");
+    fixture.assert_node(NodeKind::Import, "typing");
+    fixture.assert_node(NodeKind::Import, "json");
+    fixture.assert_node(NodeKind::Import, "numpy");
+    fixture.assert_reference(EdgeKind::Imports, ".utils");
+    fixture.assert_reference(EdgeKind::Imports, "typing");
+    fixture.assert_reference(EdgeKind::Imports, "json");
+    fixture.assert_reference(EdgeKind::Imports, "numpy");
+    fixture.assert_reference(EdgeKind::Decorates, "staticmethod");
+    fixture.assert_reference(EdgeKind::Decorates, "app.get");
+
+    let tax_rate = fixture
+        .result()
+        .nodes
+        .iter()
+        .find(|node| node.kind == NodeKind::Method && node.name == "tax_rate")
+        .unwrap();
+    assert!(tax_rate.is_static);
+
+    let fetch_item = fixture
+        .result()
+        .nodes
+        .iter()
+        .find(|node| node.kind == NodeKind::Method && node.name == "fetch_item")
+        .unwrap();
+    assert!(fetch_item.is_async);
+    assert_eq!(fetch_item.qualified_name, "Cart.fetch_item");
+    assert!(fetch_item
+        .signature
+        .as_deref()
+        .is_some_and(|signature| signature.contains("@app.get")));
 }
 
 #[test]
