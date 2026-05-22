@@ -24,6 +24,18 @@ fn harness_can_assert_extractor_registry_dispatch() {
     assert_eq!(registered_extractor_name(Language::Php), "php_ruby");
     assert_eq!(registered_extractor_name(Language::Ruby), "php_ruby");
     assert_eq!(registered_extractor_name(Language::Swift), "swift");
+    assert_eq!(
+        registered_extractor_name(Language::Dart),
+        "dart_pascal_scala"
+    );
+    assert_eq!(
+        registered_extractor_name(Language::Pascal),
+        "dart_pascal_scala"
+    );
+    assert_eq!(
+        registered_extractor_name(Language::Scala),
+        "dart_pascal_scala"
+    );
 }
 
 #[test]
@@ -573,6 +585,152 @@ func renderPayment() -> String {
     assert!(boot.is_async);
     assert_eq!(boot.visibility.as_deref(), Some("public"));
     assert_eq!(boot.qualified_name, "PaymentsController.boot");
+}
+
+#[test]
+fn harness_extracts_dart_symbols_imports_and_calls() {
+    let fixture = OriginalSourceFixture::new(
+        "payments.dart",
+        r#"
+import 'dart:async';
+import 'package:flutter/widgets.dart' as widgets;
+
+class PaymentWidget extends StatelessWidget {
+  static Future<void> load() async {
+    runApp(PaymentWidget());
+  }
+}
+
+mixin Trackable {}
+
+extension PaymentText on String {
+  String label() {
+    return trim();
+  }
+}
+
+enum PaymentStatus { pending, paid }
+
+typedef Handler = Future<void> Function();
+
+Future<void> bootstrap() async {
+  PaymentWidget.load();
+}
+"#,
+    );
+
+    assert_eq!(fixture.language(), Language::Dart);
+    fixture.assert_node(NodeKind::Import, "dart:async");
+    fixture.assert_node(NodeKind::Import, "package:flutter/widgets.dart");
+    fixture.assert_node(NodeKind::Class, "PaymentWidget");
+    fixture.assert_node(NodeKind::Trait, "Trackable");
+    fixture.assert_node(NodeKind::Trait, "PaymentText");
+    fixture.assert_node(NodeKind::Enum, "PaymentStatus");
+    fixture.assert_node(NodeKind::TypeAlias, "Handler");
+    fixture.assert_node(NodeKind::Method, "load");
+    fixture.assert_node(NodeKind::Function, "bootstrap");
+    fixture.assert_reference(EdgeKind::Imports, "dart:async");
+    fixture.assert_reference(EdgeKind::Imports, "package:flutter/widgets.dart");
+    fixture.assert_reference(EdgeKind::Extends, "StatelessWidget");
+    fixture.assert_reference(EdgeKind::Calls, "runApp");
+    fixture.assert_reference(EdgeKind::Calls, "PaymentWidget.load");
+
+    let load = fixture
+        .result()
+        .nodes
+        .iter()
+        .find(|node| node.kind == NodeKind::Method && node.name == "load")
+        .unwrap();
+    assert!(load.is_static);
+    assert!(load.is_async);
+    assert_eq!(load.qualified_name, "PaymentWidget.load");
+}
+
+#[test]
+fn harness_extracts_pascal_unit_class_functions_uses_and_calls() {
+    let fixture = OriginalSourceFixture::new(
+        "Payments.pas",
+        r#"
+unit Payments;
+
+interface
+
+uses SysUtils, Classes;
+
+type
+  TPaymentForm = class(TForm)
+  public
+    class procedure Register;
+    function Total: Integer;
+  end;
+
+procedure BootstrapPayments;
+
+implementation
+
+procedure BootstrapPayments;
+begin
+  TPaymentForm.Register;
+end;
+
+end.
+"#,
+    );
+
+    assert_eq!(fixture.language(), Language::Pascal);
+    fixture.assert_node(NodeKind::Module, "Payments");
+    fixture.assert_node(NodeKind::Import, "SysUtils");
+    fixture.assert_node(NodeKind::Import, "Classes");
+    fixture.assert_node(NodeKind::Class, "TPaymentForm");
+    fixture.assert_node(NodeKind::Method, "Register");
+    fixture.assert_node(NodeKind::Method, "Total");
+    fixture.assert_node(NodeKind::Function, "BootstrapPayments");
+    fixture.assert_reference(EdgeKind::Imports, "SysUtils");
+    fixture.assert_reference(EdgeKind::Imports, "Classes");
+    fixture.assert_reference(EdgeKind::Extends, "TForm");
+    fixture.assert_reference(EdgeKind::Calls, "TPaymentForm.Register");
+}
+
+#[test]
+fn harness_extracts_scala_symbols_imports_inheritance_and_calls() {
+    let fixture = OriginalSourceFixture::new(
+        "Payments.scala",
+        r#"
+import scala.concurrent.Future
+
+trait Routable {
+  def routes(): Unit
+}
+
+class PaymentController extends BaseController with Routable {
+  def index(id: String): Future[String] = {
+    Future.successful(renderPayment(id))
+  }
+}
+
+object PaymentApp {
+  def bootstrap(): Unit = {
+    PaymentController()
+  }
+}
+
+type Handler = String => String
+"#,
+    );
+
+    assert_eq!(fixture.language(), Language::Scala);
+    fixture.assert_node(NodeKind::Import, "scala.concurrent.Future");
+    fixture.assert_node(NodeKind::Trait, "Routable");
+    fixture.assert_node(NodeKind::Class, "PaymentController");
+    fixture.assert_node(NodeKind::Module, "PaymentApp");
+    fixture.assert_node(NodeKind::Method, "index");
+    fixture.assert_node(NodeKind::Method, "bootstrap");
+    fixture.assert_node(NodeKind::TypeAlias, "Handler");
+    fixture.assert_reference(EdgeKind::Imports, "scala.concurrent.Future");
+    fixture.assert_reference(EdgeKind::Extends, "BaseController");
+    fixture.assert_reference(EdgeKind::Implements, "Routable");
+    fixture.assert_reference(EdgeKind::Calls, "Future.successful");
+    fixture.assert_reference(EdgeKind::Calls, "renderPayment");
 }
 
 #[test]

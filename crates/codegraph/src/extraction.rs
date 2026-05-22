@@ -29,6 +29,8 @@ const JAVA_KOTLIN_LANGUAGES: &[Language] = &[Language::Java, Language::Kotlin];
 const CSHARP_LANGUAGES: &[Language] = &[Language::CSharp];
 const PHP_RUBY_LANGUAGES: &[Language] = &[Language::Php, Language::Ruby];
 const SWIFT_LANGUAGES: &[Language] = &[Language::Swift];
+const DART_PASCAL_SCALA_LANGUAGES: &[Language] =
+    &[Language::Dart, Language::Pascal, Language::Scala];
 const TYPESCRIPT_JAVASCRIPT_LANGUAGES: &[Language] = &[
     Language::TypeScript,
     Language::Tsx,
@@ -38,12 +40,9 @@ const TYPESCRIPT_JAVASCRIPT_LANGUAGES: &[Language] = &[
 const GENERIC_LANGUAGES: &[Language] = &[
     Language::C,
     Language::Cpp,
-    Language::Dart,
     Language::Svelte,
     Language::Vue,
     Language::Liquid,
-    Language::Pascal,
-    Language::Scala,
     Language::Unknown,
 ];
 
@@ -92,6 +91,11 @@ const LANGUAGE_EXTRACTORS: &[LanguageExtractor] = &[
         name: "swift",
         languages: SWIFT_LANGUAGES,
         extract: extract_swift_entry,
+    },
+    LanguageExtractor {
+        name: "dart_pascal_scala",
+        languages: DART_PASCAL_SCALA_LANGUAGES,
+        extract: extract_dart_pascal_scala_entry,
     },
     LanguageExtractor {
         name: "generic",
@@ -337,6 +341,18 @@ fn extract_swift_entry(
     refs: &mut Vec<UnresolvedReference>,
 ) {
     extract_swift(file_path, source, now, nodes, edges, refs);
+}
+
+fn extract_dart_pascal_scala_entry(
+    file_path: &str,
+    source: &str,
+    language: Language,
+    now: i64,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+    refs: &mut Vec<UnresolvedReference>,
+) {
+    extract_dart_pascal_scala(file_path, source, language, now, nodes, edges, refs);
 }
 
 fn extract_generic_entry(
@@ -1103,7 +1119,7 @@ fn add_java_kotlin_types_and_members(
         let indent = python_indent_width(line);
         while type_stack
             .last()
-            .is_some_and(|(type_indent, _, _)| indent <= *type_indent && trimmed.starts_with('}'))
+            .is_some_and(|(type_indent, _, _)| indent <= *type_indent)
         {
             type_stack.pop();
         }
@@ -1147,7 +1163,9 @@ fn add_java_kotlin_types_and_members(
                 line_no,
                 refs,
             );
-            type_stack.push((indent, name.as_str().to_string(), node.id.clone()));
+            if !trimmed.contains('}') {
+                type_stack.push((indent, name.as_str().to_string(), node.id.clone()));
+            }
             nodes.push(node);
             pending_annotations.clear();
             continue;
@@ -1403,7 +1421,7 @@ fn add_csharp_types_and_members(
         let indent = python_indent_width(line);
         while type_stack
             .last()
-            .is_some_and(|(type_indent, _, _)| indent <= *type_indent && trimmed.starts_with('}'))
+            .is_some_and(|(type_indent, _, _)| indent <= *type_indent)
         {
             type_stack.pop();
         }
@@ -1446,7 +1464,9 @@ fn add_csharp_types_and_members(
                 line_no,
                 refs,
             );
-            type_stack.push((indent, name.as_str().to_string(), node.id.clone()));
+            if !trimmed.contains('}') {
+                type_stack.push((indent, name.as_str().to_string(), node.id.clone()));
+            }
             nodes.push(node);
             pending_attributes.clear();
             continue;
@@ -1796,7 +1816,7 @@ fn add_php_symbols(
         let indent = python_indent_width(line);
         while type_stack
             .last()
-            .is_some_and(|(type_indent, _, _)| indent <= *type_indent && trimmed.starts_with('}'))
+            .is_some_and(|(type_indent, _, _)| indent <= *type_indent)
         {
             type_stack.pop();
         }
@@ -1829,7 +1849,9 @@ fn add_php_symbols(
                 line_no,
                 refs,
             );
-            type_stack.push((indent, name.as_str().to_string(), node.id.clone()));
+            if !trimmed.contains('}') {
+                type_stack.push((indent, name.as_str().to_string(), node.id.clone()));
+            }
             nodes.push(node);
             continue;
         }
@@ -2245,7 +2267,7 @@ fn add_swift_symbols(
         let indent = python_indent_width(line);
         while type_stack
             .last()
-            .is_some_and(|(type_indent, _, _)| indent <= *type_indent && trimmed.starts_with('}'))
+            .is_some_and(|(type_indent, _, _)| indent <= *type_indent)
         {
             type_stack.pop();
         }
@@ -2281,7 +2303,9 @@ fn add_swift_symbols(
                 line_no,
                 refs,
             );
-            type_stack.push((indent, name.as_str().to_string(), node.id.clone()));
+            if !trimmed.contains('}') {
+                type_stack.push((indent, name.as_str().to_string(), node.id.clone()));
+            }
             nodes.push(node);
             continue;
         }
@@ -2397,6 +2421,620 @@ fn add_swift_inheritance_refs(
             EdgeKind::Implements,
             file_path,
             Language::Swift,
+            line,
+            0,
+        );
+    }
+}
+
+fn extract_dart_pascal_scala(
+    file_path: &str,
+    source: &str,
+    language: Language,
+    now: i64,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+    refs: &mut Vec<UnresolvedReference>,
+) {
+    match language {
+        Language::Dart => extract_dart(file_path, source, now, nodes, edges, refs),
+        Language::Pascal => extract_pascal(file_path, source, now, nodes, edges, refs),
+        Language::Scala => extract_scala(file_path, source, now, nodes, edges, refs),
+        _ => {}
+    }
+}
+
+fn extract_dart(
+    file_path: &str,
+    source: &str,
+    now: i64,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+    refs: &mut Vec<UnresolvedReference>,
+) {
+    let import_re = Regex::new(
+        r#"(?m)^\s*(?:import|export)\s+['"]([^'"]+)['"](?:\s+as\s+[A-Za-z_][A-Za-z0-9_]*)?\s*;"#,
+    )
+    .unwrap();
+    for cap in import_re.captures_iter(source) {
+        let module = cap.get(1).unwrap();
+        let node = make_node(
+            file_path,
+            Language::Dart,
+            NodeKind::Import,
+            module.as_str(),
+            line_for(source, module.start()),
+            0,
+            now,
+            cap.get(0).map(|m| m.as_str().trim().to_string()),
+        );
+        add_contains(nodes, edges, &node);
+        refs_push(
+            refs,
+            &nodes[0].id,
+            module.as_str(),
+            EdgeKind::Imports,
+            file_path,
+            Language::Dart,
+            node.start_line,
+            0,
+        );
+        nodes.push(node);
+    }
+
+    let type_re =
+        Regex::new(r"^\s*(class|mixin|extension|enum)\s+([A-Za-z_][A-Za-z0-9_]*)([^{]*)\{?")
+            .unwrap();
+    let function_re = Regex::new(
+        r"^\s*(?:static\s+)?(?:[A-Za-z_][A-Za-z0-9_<>,\?\[\]]*\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\([^;{}]*\)\s*(?:async\s*)?\{?",
+    )
+    .unwrap();
+    let typealias_re = Regex::new(r"^\s*typedef\s+([A-Za-z_][A-Za-z0-9_]*)\s*=").unwrap();
+    let mut type_stack: Vec<(usize, String, String)> = Vec::new();
+    for (idx, line) in source.lines().enumerate() {
+        let line_no = idx as i64 + 1;
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with("//") {
+            continue;
+        }
+        let indent = python_indent_width(line);
+        while type_stack
+            .last()
+            .is_some_and(|(type_indent, _, _)| indent <= *type_indent)
+        {
+            type_stack.pop();
+        }
+        if let Some(cap) = type_re.captures(line) {
+            let kind = match cap.get(1).unwrap().as_str() {
+                "enum" => NodeKind::Enum,
+                "mixin" | "extension" => NodeKind::Trait,
+                _ => NodeKind::Class,
+            };
+            let name = cap.get(2).unwrap();
+            let mut node = make_node(
+                file_path,
+                Language::Dart,
+                kind,
+                name.as_str(),
+                line_no,
+                indent as i64,
+                now,
+                Some(trimmed.to_string()),
+            );
+            node.visibility = Some(dart_visibility(name.as_str()).to_string());
+            node.is_exported = node.visibility.as_deref() == Some("public");
+            add_contains(nodes, edges, &node);
+            add_dart_inheritance_refs(
+                &node.id,
+                cap.get(3).map(|m| m.as_str()).unwrap_or_default(),
+                file_path,
+                line_no,
+                refs,
+            );
+            if !trimmed.contains('}') {
+                type_stack.push((indent, name.as_str().to_string(), node.id.clone()));
+            }
+            nodes.push(node);
+            continue;
+        }
+        if let Some(cap) = typealias_re.captures(line) {
+            let name = cap.get(1).unwrap();
+            let mut node = make_node(
+                file_path,
+                Language::Dart,
+                NodeKind::TypeAlias,
+                name.as_str(),
+                line_no,
+                indent as i64,
+                now,
+                Some(trimmed.to_string()),
+            );
+            node.visibility = Some(dart_visibility(name.as_str()).to_string());
+            node.is_exported = node.visibility.as_deref() == Some("public");
+            add_contains(nodes, edges, &node);
+            nodes.push(node);
+            continue;
+        }
+        if let Some(cap) = function_re.captures(line) {
+            let name = cap.get(1).unwrap().as_str();
+            if matches!(name, "if" | "for" | "while" | "switch" | "return") {
+                continue;
+            }
+            if !trimmed.contains('{') {
+                continue;
+            }
+            let kind = if type_stack.is_empty() {
+                NodeKind::Function
+            } else {
+                NodeKind::Method
+            };
+            let mut node = make_node(
+                file_path,
+                Language::Dart,
+                kind,
+                name,
+                line_no,
+                indent as i64,
+                now,
+                Some(trimmed.to_string()),
+            );
+            node.visibility = Some(dart_visibility(name).to_string());
+            node.is_exported = node.visibility.as_deref() == Some("public");
+            node.is_static = trimmed.starts_with("static ") || trimmed.contains(" static ");
+            node.is_async = trimmed.contains(" async");
+            if let Some((_, type_name, parent_id)) = type_stack.last() {
+                node.qualified_name = format!("{}.{}", type_name, name);
+                edges.push(Edge {
+                    id: None,
+                    source: parent_id.clone(),
+                    target: node.id.clone(),
+                    kind: EdgeKind::Contains,
+                    line: None,
+                    col: None,
+                    provenance: Some("dart".into()),
+                });
+            } else {
+                add_contains(nodes, edges, &node);
+            }
+            nodes.push(node);
+        }
+    }
+    add_call_refs(
+        file_path,
+        source,
+        Language::Dart,
+        nodes,
+        refs,
+        r"([A-Za-z_][A-Za-z0-9_\.]*)\s*\(",
+    );
+}
+
+fn dart_visibility(name: &str) -> &str {
+    if name.starts_with('_') {
+        "private"
+    } else {
+        "public"
+    }
+}
+
+fn add_dart_inheritance_refs(
+    node_id: &str,
+    tail: &str,
+    file_path: &str,
+    line: i64,
+    refs: &mut Vec<UnresolvedReference>,
+) {
+    let extends_re = Regex::new(r"\bextends\s+([A-Za-z_][A-Za-z0-9_]*)").unwrap();
+    let implements_re = Regex::new(r"\bimplements\s+([A-Za-z_][A-Za-z0-9_,\s]*)").unwrap();
+    let with_re = Regex::new(r"\bwith\s+([A-Za-z_][A-Za-z0-9_,\s]*)").unwrap();
+    let on_re = Regex::new(r"\bon\s+([A-Za-z_][A-Za-z0-9_,\s]*)").unwrap();
+    if let Some(cap) = extends_re.captures(tail).or_else(|| on_re.captures(tail)) {
+        refs_push(
+            refs,
+            node_id,
+            cap.get(1).unwrap().as_str(),
+            EdgeKind::Extends,
+            file_path,
+            Language::Dart,
+            line,
+            0,
+        );
+    }
+    for re in [&implements_re, &with_re] {
+        if let Some(cap) = re.captures(tail) {
+            for name in cap[1]
+                .split(',')
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+            {
+                refs_push(
+                    refs,
+                    node_id,
+                    name,
+                    EdgeKind::Implements,
+                    file_path,
+                    Language::Dart,
+                    line,
+                    0,
+                );
+            }
+        }
+    }
+}
+
+fn extract_pascal(
+    file_path: &str,
+    source: &str,
+    now: i64,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+    refs: &mut Vec<UnresolvedReference>,
+) {
+    let unit_re = Regex::new(r"(?i)^\s*unit\s+([A-Za-z_][A-Za-z0-9_]*)\s*;").unwrap();
+    let uses_re = Regex::new(r"(?i)^\s*uses\s+([^;]+);").unwrap();
+    let class_re =
+        Regex::new(r"(?i)^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*class(?:\(([^)]*)\))?").unwrap();
+    let proc_re = Regex::new(
+        r"(?i)^\s*(?:class\s+)?(procedure|function)\s+([A-Za-z_][A-Za-z0-9_\.]*)\s*(?:\([^;]*\))?\s*(?::\s*[A-Za-z_][A-Za-z0-9_]*)?\s*;",
+    )
+    .unwrap();
+    let mut current_class: Option<(String, String)> = None;
+
+    for (idx, line) in source.lines().enumerate() {
+        let line_no = idx as i64 + 1;
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with("//") {
+            continue;
+        }
+        if let Some(cap) = unit_re.captures(line) {
+            let name = cap.get(1).unwrap();
+            let node = make_node(
+                file_path,
+                Language::Pascal,
+                NodeKind::Module,
+                name.as_str(),
+                line_no,
+                0,
+                now,
+                Some(trimmed.to_string()),
+            );
+            add_contains(nodes, edges, &node);
+            nodes.push(node);
+            continue;
+        }
+        if let Some(cap) = uses_re.captures(line) {
+            for module in cap[1].split(',').map(str::trim).filter(|m| !m.is_empty()) {
+                let node = make_node(
+                    file_path,
+                    Language::Pascal,
+                    NodeKind::Import,
+                    module,
+                    line_no,
+                    0,
+                    now,
+                    Some(trimmed.to_string()),
+                );
+                add_contains(nodes, edges, &node);
+                refs_push(
+                    refs,
+                    &nodes[0].id,
+                    module,
+                    EdgeKind::Imports,
+                    file_path,
+                    Language::Pascal,
+                    line_no,
+                    0,
+                );
+                nodes.push(node);
+            }
+            continue;
+        }
+        if let Some(cap) = class_re.captures(line) {
+            let name = cap.get(1).unwrap();
+            let node = make_node(
+                file_path,
+                Language::Pascal,
+                NodeKind::Class,
+                name.as_str(),
+                line_no,
+                0,
+                now,
+                Some(trimmed.to_string()),
+            );
+            add_contains(nodes, edges, &node);
+            if let Some(parent) = cap.get(2) {
+                refs_push(
+                    refs,
+                    &node.id,
+                    parent.as_str().trim(),
+                    EdgeKind::Extends,
+                    file_path,
+                    Language::Pascal,
+                    line_no,
+                    0,
+                );
+            }
+            current_class = Some((name.as_str().to_string(), node.id.clone()));
+            nodes.push(node);
+            continue;
+        }
+        if trimmed.eq_ignore_ascii_case("end;") {
+            current_class = None;
+            continue;
+        }
+        if let Some(cap) = proc_re.captures(line) {
+            let raw_name = cap.get(2).unwrap().as_str();
+            let name = raw_name.rsplit('.').next().unwrap_or(raw_name);
+            let kind = if raw_name.contains('.') || current_class.is_some() {
+                NodeKind::Method
+            } else {
+                NodeKind::Function
+            };
+            let mut node = make_node(
+                file_path,
+                Language::Pascal,
+                kind,
+                name,
+                line_no,
+                0,
+                now,
+                Some(trimmed.to_string()),
+            );
+            node.is_static = trimmed.to_lowercase().starts_with("class ");
+            if raw_name.contains('.') {
+                let owner = raw_name
+                    .rsplit_once('.')
+                    .map(|(owner, _)| owner)
+                    .unwrap_or(raw_name);
+                node.qualified_name = format!("{}.{}", owner, name);
+            } else if let Some((owner, parent_id)) = &current_class {
+                node.qualified_name = format!("{}.{}", owner, name);
+                edges.push(Edge {
+                    id: None,
+                    source: parent_id.clone(),
+                    target: node.id.clone(),
+                    kind: EdgeKind::Contains,
+                    line: None,
+                    col: None,
+                    provenance: Some("pascal".into()),
+                });
+                nodes.push(node);
+                continue;
+            }
+            add_contains(nodes, edges, &node);
+            nodes.push(node);
+        }
+    }
+    add_call_refs(
+        file_path,
+        source,
+        Language::Pascal,
+        nodes,
+        refs,
+        r"([A-Za-z_][A-Za-z0-9_\.]*)\s*\(",
+    );
+    add_pascal_bare_call_refs(file_path, source, nodes, refs);
+}
+
+fn add_pascal_bare_call_refs(
+    file_path: &str,
+    source: &str,
+    nodes: &[Node],
+    refs: &mut Vec<UnresolvedReference>,
+) {
+    let re = Regex::new(r"(?im)^\s*([A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*)\s*;").unwrap();
+    for cap in re.captures_iter(source) {
+        let name = cap.get(1).unwrap();
+        let line = line_for(source, name.start());
+        if let Some(caller) = nodes
+            .iter()
+            .filter(|n| matches!(n.kind, NodeKind::Function | NodeKind::Method))
+            .rev()
+            .find(|n| n.start_line <= line)
+        {
+            refs_push(
+                refs,
+                &caller.id,
+                name.as_str(),
+                EdgeKind::Calls,
+                file_path,
+                Language::Pascal,
+                line,
+                0,
+            );
+        }
+    }
+}
+
+fn extract_scala(
+    file_path: &str,
+    source: &str,
+    now: i64,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+    refs: &mut Vec<UnresolvedReference>,
+) {
+    let import_re = Regex::new(r"(?m)^\s*import\s+([A-Za-z_][A-Za-z0-9_\.\{\}, \t]*)").unwrap();
+    for cap in import_re.captures_iter(source) {
+        let module = cap.get(1).unwrap().as_str().trim();
+        let node = make_node(
+            file_path,
+            Language::Scala,
+            NodeKind::Import,
+            module,
+            line_for(source, cap.get(1).unwrap().start()),
+            0,
+            now,
+            cap.get(0).map(|m| m.as_str().trim().to_string()),
+        );
+        add_contains(nodes, edges, &node);
+        refs_push(
+            refs,
+            &nodes[0].id,
+            module,
+            EdgeKind::Imports,
+            file_path,
+            Language::Scala,
+            node.start_line,
+            0,
+        );
+        nodes.push(node);
+    }
+
+    let type_re = Regex::new(
+        r"^\s*(?:(private|protected)\s+)?(class|object|trait|enum)\s+([A-Za-z_][A-Za-z0-9_]*)([^{=]*)",
+    )
+    .unwrap();
+    let def_re = Regex::new(
+        r"^\s*(?:(private|protected)\s+)?(?:override\s+)?def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\([^)]*\)\s*(?::\s*[A-Za-z_][A-Za-z0-9_\[\],\s]*)?",
+    )
+    .unwrap();
+    let typealias_re = Regex::new(r"^\s*type\s+([A-Za-z_][A-Za-z0-9_]*)\s*=").unwrap();
+    let mut type_stack: Vec<(usize, String, String)> = Vec::new();
+    for (idx, line) in source.lines().enumerate() {
+        let line_no = idx as i64 + 1;
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with("//") {
+            continue;
+        }
+        let indent = python_indent_width(line);
+        while type_stack
+            .last()
+            .is_some_and(|(type_indent, _, _)| indent <= *type_indent)
+        {
+            type_stack.pop();
+        }
+        if let Some(cap) = type_re.captures(line) {
+            let kind = match cap.get(2).unwrap().as_str() {
+                "trait" => NodeKind::Trait,
+                "enum" => NodeKind::Enum,
+                "object" => NodeKind::Module,
+                _ => NodeKind::Class,
+            };
+            let name = cap.get(3).unwrap();
+            let mut node = make_node(
+                file_path,
+                Language::Scala,
+                kind,
+                name.as_str(),
+                line_no,
+                indent as i64,
+                now,
+                Some(trimmed.to_string()),
+            );
+            node.visibility = cap
+                .get(1)
+                .map(|m| m.as_str().to_string())
+                .or_else(|| Some("public".to_string()));
+            node.is_exported = node.visibility.as_deref() == Some("public");
+            add_contains(nodes, edges, &node);
+            add_scala_inheritance_refs(
+                &node.id,
+                cap.get(4).map(|m| m.as_str()).unwrap_or_default(),
+                file_path,
+                line_no,
+                refs,
+            );
+            if !trimmed.contains('}') {
+                type_stack.push((indent, name.as_str().to_string(), node.id.clone()));
+            }
+            nodes.push(node);
+            continue;
+        }
+        if let Some(cap) = def_re.captures(line) {
+            let name = cap.get(2).unwrap().as_str();
+            let kind = if type_stack.is_empty() {
+                NodeKind::Function
+            } else {
+                NodeKind::Method
+            };
+            let mut node = make_node(
+                file_path,
+                Language::Scala,
+                kind,
+                name,
+                line_no,
+                indent as i64,
+                now,
+                Some(trimmed.to_string()),
+            );
+            node.visibility = cap
+                .get(1)
+                .map(|m| m.as_str().to_string())
+                .or_else(|| Some("public".to_string()));
+            node.is_exported = node.visibility.as_deref() == Some("public");
+            if let Some((_, owner, parent_id)) = type_stack.last() {
+                node.qualified_name = format!("{}.{}", owner, name);
+                edges.push(Edge {
+                    id: None,
+                    source: parent_id.clone(),
+                    target: node.id.clone(),
+                    kind: EdgeKind::Contains,
+                    line: None,
+                    col: None,
+                    provenance: Some("scala".into()),
+                });
+            } else {
+                add_contains(nodes, edges, &node);
+            }
+            nodes.push(node);
+            continue;
+        }
+        if let Some(cap) = typealias_re.captures(line) {
+            let name = cap.get(1).unwrap();
+            let node = make_node(
+                file_path,
+                Language::Scala,
+                NodeKind::TypeAlias,
+                name.as_str(),
+                line_no,
+                indent as i64,
+                now,
+                Some(trimmed.to_string()),
+            );
+            add_contains(nodes, edges, &node);
+            nodes.push(node);
+        }
+    }
+    add_call_refs(
+        file_path,
+        source,
+        Language::Scala,
+        nodes,
+        refs,
+        r"([A-Za-z_][A-Za-z0-9_\.]*)\s*\(",
+    );
+}
+
+fn add_scala_inheritance_refs(
+    node_id: &str,
+    tail: &str,
+    file_path: &str,
+    line: i64,
+    refs: &mut Vec<UnresolvedReference>,
+) {
+    let extends_re = Regex::new(r"\bextends\s+([A-Za-z_][A-Za-z0-9_\.]*)").unwrap();
+    let with_re = Regex::new(r"\bwith\s+([A-Za-z_][A-Za-z0-9_\.]*)").unwrap();
+    if let Some(cap) = extends_re.captures(tail) {
+        refs_push(
+            refs,
+            node_id,
+            cap.get(1).unwrap().as_str(),
+            EdgeKind::Extends,
+            file_path,
+            Language::Scala,
+            line,
+            0,
+        );
+    }
+    for cap in with_re.captures_iter(tail) {
+        refs_push(
+            refs,
+            node_id,
+            cap.get(1).unwrap().as_str(),
+            EdgeKind::Implements,
+            file_path,
+            Language::Scala,
             line,
             0,
         );
