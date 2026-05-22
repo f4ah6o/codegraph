@@ -91,6 +91,22 @@ impl OriginalSourceFixture {
         );
     }
 
+    pub fn assert_exported_node(&self, kind: NodeKind, name: &str) {
+        assert!(
+            self.result
+                .nodes
+                .iter()
+                .any(|node| node.kind == kind && node.name == name && node.is_exported),
+            "missing exported {kind:?} node {name:?} in {}: {:?}",
+            self.path.display(),
+            self.result
+                .nodes
+                .iter()
+                .map(|node| (node.kind, node.name.as_str(), node.is_exported))
+                .collect::<Vec<_>>()
+        );
+    }
+
     pub fn assert_reference(&self, kind: EdgeKind, name: &str) {
         assert!(
             self.result

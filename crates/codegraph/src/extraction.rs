@@ -23,11 +23,13 @@ struct LanguageExtractor {
 
 const RUST_LANGUAGES: &[Language] = &[Language::Rust];
 const MOONBIT_LANGUAGES: &[Language] = &[Language::MoonBit];
-const GENERIC_LANGUAGES: &[Language] = &[
+const TYPESCRIPT_JAVASCRIPT_LANGUAGES: &[Language] = &[
     Language::TypeScript,
     Language::Tsx,
     Language::JavaScript,
     Language::Jsx,
+];
+const GENERIC_LANGUAGES: &[Language] = &[
     Language::Python,
     Language::Go,
     Language::Java,
@@ -57,6 +59,11 @@ const LANGUAGE_EXTRACTORS: &[LanguageExtractor] = &[
         name: "moonbit",
         languages: MOONBIT_LANGUAGES,
         extract: extract_moonbit_entry,
+    },
+    LanguageExtractor {
+        name: "typescript_javascript",
+        languages: TYPESCRIPT_JAVASCRIPT_LANGUAGES,
+        extract: extract_typescript_javascript_entry,
     },
     LanguageExtractor {
         name: "generic",
@@ -220,6 +227,18 @@ fn extract_moonbit_entry(
     extract_moonbit(file_path, source, now, nodes, edges, refs);
 }
 
+fn extract_typescript_javascript_entry(
+    file_path: &str,
+    source: &str,
+    language: Language,
+    now: i64,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+    refs: &mut Vec<UnresolvedReference>,
+) {
+    extract_typescript_javascript(file_path, source, language, now, nodes, edges, refs);
+}
+
 fn extract_generic_entry(
     file_path: &str,
     source: &str,
@@ -230,6 +249,182 @@ fn extract_generic_entry(
     refs: &mut Vec<UnresolvedReference>,
 ) {
     extract_generic(file_path, source, language, now, nodes, edges, refs);
+}
+
+fn extract_typescript_javascript(
+    file_path: &str,
+    source: &str,
+    language: Language,
+    now: i64,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+    refs: &mut Vec<UnresolvedReference>,
+) {
+    add_regex_nodes(
+        file_path,
+        source,
+        language,
+        now,
+        nodes,
+        edges,
+        r"(?m)^\s*(export\s+)?(?:async\s+)?function\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*([^{;]*)",
+        NodeKind::Function,
+    );
+    add_regex_nodes(
+        file_path,
+        source,
+        language,
+        now,
+        nodes,
+        edges,
+        r"(?m)^\s*(export\s+)?class\s+([A-Za-z_$][A-Za-z0-9_$]*)",
+        NodeKind::Class,
+    );
+    add_regex_nodes(
+        file_path,
+        source,
+        language,
+        now,
+        nodes,
+        edges,
+        r"(?m)^\s*(export\s+)?interface\s+([A-Za-z_$][A-Za-z0-9_$]*)",
+        NodeKind::Interface,
+    );
+    add_regex_nodes(
+        file_path,
+        source,
+        language,
+        now,
+        nodes,
+        edges,
+        r"(?m)^\s*(export\s+)?type\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=",
+        NodeKind::TypeAlias,
+    );
+    add_ts_js_arrow_functions(file_path, source, language, now, nodes, edges);
+    add_ts_js_imports(file_path, source, language, now, nodes, edges, refs);
+    add_tsx_jsx_components(file_path, language, now, nodes, edges);
+    add_call_refs(
+        file_path,
+        source,
+        language,
+        nodes,
+        refs,
+        r"([A-Za-z_$][A-Za-z0-9_$.]*)\s*\(",
+    );
+}
+
+fn add_ts_js_arrow_functions(
+    file_path: &str,
+    source: &str,
+    language: Language,
+    now: i64,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+) {
+    let re = Regex::new(
+        r"(?m)^\s*(export\s+)?const\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*(?::[^=]+)?=\s*(?:async\s+)?(?:\([^)]*\)|[A-Za-z_$][A-Za-z0-9_$]*)(?:\s*:\s*[^=;\n]+)?\s*=>",
+    )
+    .unwrap();
+    for cap in re.captures_iter(source) {
+        let name_match = cap.get(2).unwrap();
+        let mut node = make_node(
+            file_path,
+            language,
+            NodeKind::Function,
+            name_match.as_str(),
+            line_for(source, name_match.start()),
+            0,
+            now,
+            cap.get(0).map(|m| m.as_str().trim().to_string()),
+        );
+        node.is_exported = cap.get(1).is_some();
+        node.visibility = node.is_exported.then(|| "public".to_string());
+        node.is_async = cap
+            .get(0)
+            .map(|m| m.as_str().contains("async"))
+            .unwrap_or(false);
+        add_contains(nodes, edges, &node);
+        nodes.push(node);
+    }
+}
+
+fn add_ts_js_imports(
+    file_path: &str,
+    source: &str,
+    language: Language,
+    now: i64,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+    refs: &mut Vec<UnresolvedReference>,
+) {
+    let re =
+        Regex::new(r#"(?m)^\s*import(?:\s+type)?(?:\s+[^;\n]*?\s+from)?\s+['"]([^'"]+)['"]\s*;?"#)
+            .unwrap();
+    for cap in re.captures_iter(source) {
+        let module = cap.get(1).unwrap();
+        let signature = cap.get(0).unwrap().as_str().trim().to_string();
+        let node = make_node(
+            file_path,
+            language,
+            NodeKind::Import,
+            module.as_str(),
+            line_for(source, module.start()),
+            0,
+            now,
+            Some(signature),
+        );
+        add_contains(nodes, edges, &node);
+        refs.push(unresolved(
+            &nodes[0].id,
+            module.as_str(),
+            EdgeKind::Imports,
+            file_path,
+            language,
+            node.start_line,
+        ));
+        nodes.push(node);
+    }
+}
+
+fn add_tsx_jsx_components(
+    file_path: &str,
+    language: Language,
+    now: i64,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+) {
+    if !matches!(language, Language::Tsx | Language::Jsx) {
+        return;
+    }
+    let component_names: Vec<(String, i64, bool, Option<String>)> = nodes
+        .iter()
+        .filter(|node| matches!(node.kind, NodeKind::Function | NodeKind::Class))
+        .filter(|node| node.name.chars().next().is_some_and(char::is_uppercase))
+        .map(|node| {
+            (
+                node.name.clone(),
+                node.start_line,
+                node.is_exported,
+                node.signature.clone(),
+            )
+        })
+        .collect();
+    for (name, line, is_exported, signature) in component_names {
+        let mut node = make_node(
+            file_path,
+            language,
+            NodeKind::Component,
+            &name,
+            line,
+            0,
+            now,
+            signature,
+        );
+        node.is_exported = is_exported;
+        node.visibility = node.is_exported.then(|| "public".to_string());
+        add_contains(nodes, edges, &node);
+        nodes.push(node);
+    }
 }
 
 fn extract_rust(

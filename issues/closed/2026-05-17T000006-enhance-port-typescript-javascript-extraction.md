@@ -1,6 +1,7 @@
 # Port TypeScript and JavaScript extraction
 
 Created: 2026-05-17
+Completed: 2026-05-22
 Model: GPT-5 Codex
 
 ## 背景
@@ -24,3 +25,18 @@ original は TypeScript/JavaScript/TSX/JSX の symbol、export、import、compon
 - TypeScript/JavaScript fixture tests
 - `cargo test --all --all-features`
 
+## 解決方法
+
+`crates/codegraph/src/extraction.rs` に TypeScript / JavaScript 専用 extractor を追加し、
+registry から `typescript_javascript` として dispatch するようにした。tree-sitter
+parser dependency は追加せず、既存構成に合わせた bounded regex 実装で
+function / class / interface / type alias / exported const arrow function を抽出する。
+
+import は default、named、namespace、side-effect、type import、relative import を
+module 名の `import` node と `imports` unresolved reference として記録する。
+TSX / JSX では uppercase の function / class / arrow function から `component`
+node も追加する。
+
+`crates/codegraph/tests/original_fixture_parity.rs` に TypeScript / JavaScript fixture
+tests を追加し、exports、imports、arrow functions、JSX component dispatch を検証した。
+`docs/PORT_PARITY_MATRIX.md` の該当行も Done に更新した。

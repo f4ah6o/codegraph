@@ -8,7 +8,14 @@ use support::{OriginalFixtureProject, OriginalSourceFixture};
 fn harness_can_assert_extractor_registry_dispatch() {
     assert_eq!(registered_extractor_name(Language::Rust), "rust");
     assert_eq!(registered_extractor_name(Language::MoonBit), "moonbit");
-    assert_eq!(registered_extractor_name(Language::TypeScript), "generic");
+    assert_eq!(
+        registered_extractor_name(Language::TypeScript),
+        "typescript_javascript"
+    );
+    assert_eq!(
+        registered_extractor_name(Language::JavaScript),
+        "typescript_javascript"
+    );
 }
 
 #[test]
@@ -33,8 +40,8 @@ export class PaymentService {
     assert_eq!(fixture.language(), Language::TypeScript);
     assert_eq!(fixture.path().to_string_lossy(), "payment.ts");
     assert!(fixture.source().contains("processPayment"));
-    fixture.assert_node(NodeKind::Function, "processPayment");
-    fixture.assert_node(NodeKind::Class, "PaymentService");
+    fixture.assert_exported_node(NodeKind::Function, "processPayment");
+    fixture.assert_exported_node(NodeKind::Class, "PaymentService");
     fixture.assert_reference(EdgeKind::Calls, "stripe.charge");
     assert!(
         fixture
@@ -44,6 +51,69 @@ export class PaymentService {
             .any(|edge| edge.kind == EdgeKind::Contains),
         "fixture should expose containment edges for shared assertions"
     );
+}
+
+#[test]
+fn harness_extracts_typescript_interfaces_aliases_and_imports() {
+    let fixture = OriginalSourceFixture::new(
+        "types.ts",
+        r#"
+import React, { useState as useStateAlias } from 'react';
+import type { FC, ReactNode } from 'react';
+import './styles.css';
+
+export interface User {
+  id: string;
+}
+
+export type AuthContextValue = {
+  user: User | null;
+};
+
+export const useAuth = (): AuthContextValue => {
+  return useContext(AuthContext);
+};
+"#,
+    );
+
+    fixture.assert_exported_node(NodeKind::Interface, "User");
+    fixture.assert_exported_node(NodeKind::TypeAlias, "AuthContextValue");
+    fixture.assert_exported_node(NodeKind::Function, "useAuth");
+    fixture.assert_node(NodeKind::Import, "react");
+    fixture.assert_node(NodeKind::Import, "./styles.css");
+    fixture.assert_reference(EdgeKind::Imports, "react");
+    fixture.assert_reference(EdgeKind::Imports, "./styles.css");
+}
+
+#[test]
+fn harness_extracts_jsx_components_and_javascript_arrows() {
+    let jsx = OriginalSourceFixture::new(
+        "Button.jsx",
+        r#"
+import * as React from 'react';
+
+export const Button = async () => {
+  return <button onClick={trackClick}>Save</button>;
+};
+"#,
+    );
+
+    jsx.assert_exported_node(NodeKind::Function, "Button");
+    jsx.assert_exported_node(NodeKind::Component, "Button");
+    jsx.assert_reference(EdgeKind::Imports, "react");
+
+    let js = OriginalSourceFixture::new(
+        "api.js",
+        r#"
+export const fetchData = async () => {
+  const response = await fetch('/api/data');
+  return response.json();
+};
+"#,
+    );
+
+    js.assert_exported_node(NodeKind::Function, "fetchData");
+    js.assert_reference(EdgeKind::Calls, "fetch");
 }
 
 #[test]
