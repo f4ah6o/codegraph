@@ -140,6 +140,7 @@ enum Command {
         #[arg(short, long, default_value_t = 300)]
         debounce: u64,
     },
+    Skills,
     Install,
 }
 
@@ -450,6 +451,9 @@ fn main() -> Result<()> {
                     debounce_ms: debounce,
                 },
             )?;
+        }
+        Command::Skills => {
+            print!("{}", include_str!("../assets/cgz-skill.md"));
         }
         Command::Install => {
             println!(

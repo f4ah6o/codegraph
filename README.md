@@ -112,6 +112,7 @@ cgz affected <files>   # print affected test files from import dependents
 cgz affected <files> -j # print affected test evidence as JSON
 cgz serve --mcp        # start the MCP server
 cgz watch [path]       # watch source files and debounce incremental sync
+cgz skills             # print an agent skill/playbook for using cgz
 cgz unlock [path]      # remove .codegraph/codegraph.lock
 ```
 
@@ -128,6 +129,8 @@ finish with the target repository's normal tests, type checks, or build checks.
 See [docs/AGENT_WORKFLOW.md](./docs/AGENT_WORKFLOW.md) for the short playbook.
 See [docs/AGENT_CONTEXT_EVAL.md](./docs/AGENT_CONTEXT_EVAL.md) for the
 automated context-success fixture used to guard agent navigation quality.
+Run `cgz skills` to print a portable Markdown skill for agents that should use
+`cgz` effectively in other repositories.
 
 Running `cgz` with no subcommand currently prints:
 
