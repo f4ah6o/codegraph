@@ -23,6 +23,13 @@ The crate lives at `crates/codegraph`. The workspace root is now a Rust Cargo
 workspace; the original TypeScript CodeGraph code is tracked separately on the
 `original-codegraph/main` branch.
 
+## Upstream Acknowledgement
+
+`cgz` is a Rust rework of the original
+[CodeGraph](https://github.com/colbymchenry/codegraph) project. This repository
+keeps the upstream project's ideas and history in view while evolving the tool
+as a local-first Rust CLI and library.
+
 ## What cgz Stores
 
 `cgz init` creates `.codegraph/` in the target project. The database file is
