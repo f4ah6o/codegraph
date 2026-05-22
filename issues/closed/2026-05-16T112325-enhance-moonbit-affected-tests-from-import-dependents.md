@@ -110,3 +110,20 @@ analysis に反映する必要がある。
 `.mbt` は 314 files 程度だが index に 133 秒かかり、処理中に `.codegraph/codegraph.db-wal`
 が一時的に約 650MB まで増えた。完了後の DB は約 19MB まで戻ったが、MoonBit の解決処理で
 大量の中間書き込みが発生している可能性がある。
+
+## 解決方法
+
+Completed: 2026-05-22
+
+MoonBit の package import graph を `cgz affected` 側で構築し、変更 file が属する
+package を import する local package を推移的に辿って、その dependent package 内の
+test file を affected test として返すようにした。
+
+package 名は root `moon.mod.json` の `name` と package directory から導出し、
+`moon.pkg.json` / `moon.pkg` の `import` / `imports` は array / object / string を扱う。
+JSON debug には `matchedBy.moonbitPackageDependents` を追加し、この経路で拾った
+integration test を確認できるようにした。
+
+root package が `runtime` を import し、`runtime` が `engine` を import する fixture を追加し、
+`runtime/runtime_state.mbt` と `engine/parser.mbt` のどちらの変更でも root の
+`app_test.mbt` が返ること、無関係 package の test が混ざらないことを固定した。
