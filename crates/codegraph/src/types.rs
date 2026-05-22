@@ -345,6 +345,7 @@ pub struct IndexResult {
     pub success: bool,
     pub files_indexed: i64,
     pub files_skipped: i64,
+    pub files_deleted: i64,
     pub files_errored: i64,
     pub nodes_created: i64,
     pub edges_created: i64,

@@ -566,8 +566,13 @@ fn resolve_root(path: Option<PathBuf>) -> Result<PathBuf> {
 
 fn print_index_result(result: &codegraph::types::IndexResult) {
     println!(
-        "Indexed {} files, {} nodes, {} edges in {}ms",
-        result.files_indexed, result.nodes_created, result.edges_created, result.duration_ms
+        "Indexed {} files, skipped {}, deleted {}, {} nodes, {} edges in {}ms",
+        result.files_indexed,
+        result.files_skipped,
+        result.files_deleted,
+        result.nodes_created,
+        result.edges_created,
+        result.duration_ms
     );
     if !result.errors.is_empty() {
         eprintln!("Errors:");

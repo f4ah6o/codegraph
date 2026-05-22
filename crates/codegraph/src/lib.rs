@@ -70,6 +70,43 @@ impl CodeGraph {
         let mut result = IndexResult::default();
 
         for path in files {
+            self.index_changed_file(&path, &mut result)?;
+        }
+
+        self.db.clear_resolved_reference_edges()?;
+        self.db.resolve_references(&self.root)?;
+        result.edges_created = self.db.edge_count()?;
+        result.success = result.files_errored == 0;
+        result.duration_ms = start.elapsed().as_millis() as i64;
+        Ok(result)
+    }
+
+    pub fn sync(&mut self) -> Result<IndexResult> {
+        let start = std::time::Instant::now();
+        let files = self.scan_files()?;
+        let current_paths = files
+            .iter()
+            .map(|path| normalized_path(path))
+            .collect::<BTreeSet<_>>();
+        let existing = self
+            .db
+            .get_all_files()?
+            .into_iter()
+            .map(|file| (file.path.clone(), file))
+            .collect::<BTreeMap<_, _>>();
+        let mut result = IndexResult::default();
+        let mut changed = false;
+
+        for path in existing.keys() {
+            if !current_paths.contains(path) {
+                self.db.delete_file_index(path)?;
+                result.files_deleted += 1;
+                changed = true;
+            }
+        }
+
+        for path in files {
+            let path_key = normalized_path(&path);
             let full = self.root.join(&path);
             let content = match fs::read_to_string(&full) {
                 Ok(content) => content,
@@ -79,45 +116,26 @@ impl CodeGraph {
                     continue;
                 }
             };
-            let lang = detect_language(&path, &content);
-            if lang.is_unknown() {
+            let hash = content_hash(&content);
+            if existing
+                .get(&path_key)
+                .is_some_and(|file| file.content_hash == hash)
+            {
                 result.files_skipped += 1;
                 continue;
             }
-            let extraction = extract_from_source(&path, &content, lang);
-            let hash = content_hash(&content);
-            let metadata = fs::metadata(&full)?;
-            self.db.insert_file(&FileRecord {
-                path: path.to_string_lossy().replace('\\', "/"),
-                content_hash: hash,
-                language: lang,
-                size: metadata.len(),
-                modified_at: metadata
-                    .modified()
-                    .ok()
-                    .and_then(system_time_ms)
-                    .unwrap_or_default(),
-                indexed_at: now_ms(),
-                node_count: extraction.nodes.len() as i64,
-            })?;
-            self.db.insert_nodes(&extraction.nodes)?;
-            self.db.insert_edges(&extraction.edges)?;
-            self.db
-                .insert_unresolved_refs(&extraction.unresolved_references)?;
-            result.files_indexed += 1;
-            result.nodes_created += extraction.nodes.len() as i64;
-            result.edges_created += extraction.edges.len() as i64;
+            self.index_changed_file_with_content(&path, content, Some(hash), &mut result)?;
+            changed = true;
         }
 
-        self.db.resolve_references(&self.root)?;
+        if changed {
+            self.db.clear_resolved_reference_edges()?;
+            self.db.resolve_references(&self.root)?;
+        }
         result.edges_created = self.db.edge_count()?;
         result.success = result.files_errored == 0;
         result.duration_ms = start.elapsed().as_millis() as i64;
         Ok(result)
-    }
-
-    pub fn sync(&mut self) -> Result<IndexResult> {
-        self.index_all()
     }
 
     pub fn stats(&self) -> Result<GraphStats> {
@@ -602,6 +620,61 @@ impl CodeGraph {
 
     pub fn close(self) {}
 
+    fn index_changed_file(&self, path: &Path, result: &mut IndexResult) -> Result<()> {
+        let full = self.root.join(path);
+        let content = match fs::read_to_string(&full) {
+            Ok(content) => content,
+            Err(err) => {
+                result.files_errored += 1;
+                result.errors.push(format!("{}: {}", path.display(), err));
+                return Ok(());
+            }
+        };
+        self.index_changed_file_with_content(path, content, None, result)
+    }
+
+    fn index_changed_file_with_content(
+        &self,
+        path: &Path,
+        content: String,
+        hash: Option<String>,
+        result: &mut IndexResult,
+    ) -> Result<()> {
+        let path_key = normalized_path(path);
+        let lang = detect_language(path, &content);
+        if lang.is_unknown() {
+            self.db.delete_file_index(&path_key)?;
+            result.files_skipped += 1;
+            return Ok(());
+        }
+        let full = self.root.join(path);
+        let metadata = fs::metadata(&full)?;
+        let extraction = extract_from_source(path, &content, lang);
+        let file = FileRecord {
+            path: path_key,
+            content_hash: hash.unwrap_or_else(|| content_hash(&content)),
+            language: lang,
+            size: metadata.len(),
+            modified_at: metadata
+                .modified()
+                .ok()
+                .and_then(system_time_ms)
+                .unwrap_or_default(),
+            indexed_at: now_ms(),
+            node_count: extraction.nodes.len() as i64,
+        };
+        self.db.replace_file_index(
+            &file,
+            &extraction.nodes,
+            &extraction.edges,
+            &extraction.unresolved_references,
+        )?;
+        result.files_indexed += 1;
+        result.nodes_created += extraction.nodes.len() as i64;
+        result.edges_created += extraction.edges.len() as i64;
+        Ok(())
+    }
+
     fn scan_files(&self) -> Result<Vec<PathBuf>> {
         let mut out = Vec::new();
         let walker = ignore::WalkBuilder::new(&self.root)
@@ -641,6 +714,10 @@ fn file_list_entry(file: FileRecord, include_metadata: bool) -> FileListEntry {
         modified_at: include_metadata.then_some(file.modified_at),
         indexed_at: include_metadata.then_some(file.indexed_at),
     }
+}
+
+fn normalized_path(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
 }
 
 fn file_path_matches_filter(filter: &str, path: &str) -> bool {

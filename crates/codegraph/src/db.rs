@@ -130,6 +130,73 @@ impl Database {
         Ok(())
     }
 
+    pub fn delete_file_index(&self, path: &str) -> Result<()> {
+        self.conn.execute_batch("BEGIN IMMEDIATE TRANSACTION")?;
+        let result = (|| -> Result<()> {
+            self.delete_file_index_inner(path)?;
+            Ok(())
+        })();
+        match result {
+            Ok(()) => {
+                self.conn.execute_batch("COMMIT")?;
+                Ok(())
+            }
+            Err(err) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(err)
+            }
+        }
+    }
+
+    pub fn replace_file_index(
+        &self,
+        file: &FileRecord,
+        nodes: &[Node],
+        edges: &[Edge],
+        refs: &[UnresolvedReference],
+    ) -> Result<()> {
+        self.conn.execute_batch("BEGIN IMMEDIATE TRANSACTION")?;
+        let result = (|| -> Result<()> {
+            self.delete_file_index_inner(&file.path)?;
+            self.insert_file(file)?;
+            self.insert_nodes(nodes)?;
+            self.insert_edges(edges)?;
+            self.insert_unresolved_refs(refs)?;
+            Ok(())
+        })();
+        match result {
+            Ok(()) => {
+                self.conn.execute_batch("COMMIT")?;
+                Ok(())
+            }
+            Err(err) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(err)
+            }
+        }
+    }
+
+    pub fn clear_resolved_reference_edges(&self) -> Result<()> {
+        self.conn
+            .execute("DELETE FROM edges WHERE provenance = 'resolver'", [])?;
+        Ok(())
+    }
+
+    fn delete_file_index_inner(&self, path: &str) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM edges WHERE source IN (SELECT id FROM nodes WHERE file_path = ?1)
+             OR target IN (SELECT id FROM nodes WHERE file_path = ?1)",
+            [path],
+        )?;
+        self.conn
+            .execute("DELETE FROM unresolved_refs WHERE file_path = ?1", [path])?;
+        self.conn
+            .execute("DELETE FROM nodes WHERE file_path = ?1", [path])?;
+        self.conn
+            .execute("DELETE FROM files WHERE path = ?1", [path])?;
+        Ok(())
+    }
+
     pub fn insert_file(&self, file: &FileRecord) -> Result<()> {
         self.conn.execute(
             "INSERT OR REPLACE INTO files (path, content_hash, language, size, modified_at, indexed_at, node_count) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
