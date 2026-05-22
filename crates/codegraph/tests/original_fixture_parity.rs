@@ -21,6 +21,8 @@ fn harness_can_assert_extractor_registry_dispatch() {
     assert_eq!(registered_extractor_name(Language::Java), "java_kotlin");
     assert_eq!(registered_extractor_name(Language::Kotlin), "java_kotlin");
     assert_eq!(registered_extractor_name(Language::CSharp), "csharp");
+    assert_eq!(registered_extractor_name(Language::Php), "php_ruby");
+    assert_eq!(registered_extractor_name(Language::Ruby), "php_ruby");
 }
 
 #[test]
@@ -407,6 +409,103 @@ public interface IPaymentsController {
     assert!(method.is_async);
     assert_eq!(method.visibility.as_deref(), Some("public"));
     assert_eq!(method.qualified_name, "PaymentsController.ListPayments");
+}
+
+#[test]
+fn harness_extracts_php_symbols_uses_inheritance_and_calls() {
+    let fixture = OriginalSourceFixture::new(
+        "PaymentController.php",
+        r#"
+<?php
+
+use App\Services\PaymentService;
+use App\Support\{Logger, Auditor};
+
+class PaymentController extends BaseController implements Responsable, Jsonable {
+    use AuthorizesRequests;
+
+    public static function index($request) {
+        return PaymentService::list($request);
+    }
+}
+
+function payment_helper() {
+    return Logger::debug('payments');
+}
+"#,
+    );
+
+    assert_eq!(fixture.language(), Language::Php);
+    fixture.assert_exported_node(NodeKind::Class, "PaymentController");
+    fixture.assert_node(NodeKind::Method, "index");
+    fixture.assert_node(NodeKind::Function, "payment_helper");
+    fixture.assert_node(NodeKind::Import, r"App\Services\PaymentService");
+    fixture.assert_node(NodeKind::Import, r"App\Support\Logger");
+    fixture.assert_node(NodeKind::Import, r"App\Support\Auditor");
+    fixture.assert_reference(EdgeKind::Imports, r"App\Services\PaymentService");
+    fixture.assert_reference(EdgeKind::Imports, r"App\Support\Logger");
+    fixture.assert_reference(EdgeKind::Imports, r"App\Support\Auditor");
+    fixture.assert_reference(EdgeKind::Extends, "BaseController");
+    fixture.assert_reference(EdgeKind::Implements, "Responsable");
+    fixture.assert_reference(EdgeKind::Implements, "Jsonable");
+    fixture.assert_reference(EdgeKind::Implements, "AuthorizesRequests");
+    fixture.assert_reference(EdgeKind::Calls, r"PaymentService::list");
+    fixture.assert_reference(EdgeKind::Calls, r"Logger::debug");
+
+    let method = fixture
+        .result()
+        .nodes
+        .iter()
+        .find(|node| node.kind == NodeKind::Method && node.name == "index")
+        .unwrap();
+    assert!(method.is_static);
+    assert_eq!(method.visibility.as_deref(), Some("public"));
+    assert_eq!(method.qualified_name, "PaymentController::index");
+}
+
+#[test]
+fn harness_extracts_ruby_modules_classes_methods_requires_and_calls() {
+    let fixture = OriginalSourceFixture::new(
+        "payments_controller.rb",
+        r#"
+require "json"
+require_relative "../models/payment"
+
+module Admin
+  class PaymentsController < ApplicationController
+    def self.index
+      render_json(payments)
+    end
+
+    def show
+      Payment.find(params[:id])
+    end
+  end
+end
+"#,
+    );
+
+    assert_eq!(fixture.language(), Language::Ruby);
+    fixture.assert_node(NodeKind::Import, "json");
+    fixture.assert_node(NodeKind::Import, "../models/payment");
+    fixture.assert_node(NodeKind::Module, "Admin");
+    fixture.assert_node(NodeKind::Class, "PaymentsController");
+    fixture.assert_node(NodeKind::Method, "index");
+    fixture.assert_node(NodeKind::Method, "show");
+    fixture.assert_reference(EdgeKind::Imports, "json");
+    fixture.assert_reference(EdgeKind::Imports, "../models/payment");
+    fixture.assert_reference(EdgeKind::Extends, "ApplicationController");
+    fixture.assert_reference(EdgeKind::Calls, "render_json");
+    fixture.assert_reference(EdgeKind::Calls, "find");
+
+    let index = fixture
+        .result()
+        .nodes
+        .iter()
+        .find(|node| node.kind == NodeKind::Method && node.name == "index")
+        .unwrap();
+    assert!(index.is_static);
+    assert_eq!(index.qualified_name, "PaymentsController.index");
 }
 
 #[test]

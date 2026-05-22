@@ -1,6 +1,7 @@
 # Port PHP and Ruby extraction
 
 Created: 2026-05-17
+Completed: 2026-05-22
 Model: GPT-5 Codex
 
 ## 背景
@@ -24,3 +25,9 @@ original は PHP と Ruby の classes/modules、methods/functions、imports/requ
 - PHP/Ruby fixture tests
 - `cargo test --all --all-features`
 
+## 解決方法
+
+- PHP/Ruby 専用 extractor を registry に追加し、generic extraction から分離した。
+- PHP の class、interface、trait、enum、function、method、use statement、extends/implements、trait use を抽出・記録した。
+- Ruby の module、class、method、singleton method、require/require_relative、class inheritance を抽出・記録した。
+- PHP/Ruby fixture tests を追加し、`cargo test --all --all-features` で確認した。

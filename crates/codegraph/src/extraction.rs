@@ -27,6 +27,7 @@ const PYTHON_LANGUAGES: &[Language] = &[Language::Python];
 const GO_LANGUAGES: &[Language] = &[Language::Go];
 const JAVA_KOTLIN_LANGUAGES: &[Language] = &[Language::Java, Language::Kotlin];
 const CSHARP_LANGUAGES: &[Language] = &[Language::CSharp];
+const PHP_RUBY_LANGUAGES: &[Language] = &[Language::Php, Language::Ruby];
 const TYPESCRIPT_JAVASCRIPT_LANGUAGES: &[Language] = &[
     Language::TypeScript,
     Language::Tsx,
@@ -36,8 +37,6 @@ const TYPESCRIPT_JAVASCRIPT_LANGUAGES: &[Language] = &[
 const GENERIC_LANGUAGES: &[Language] = &[
     Language::C,
     Language::Cpp,
-    Language::Php,
-    Language::Ruby,
     Language::Swift,
     Language::Dart,
     Language::Svelte,
@@ -83,6 +82,11 @@ const LANGUAGE_EXTRACTORS: &[LanguageExtractor] = &[
         name: "csharp",
         languages: CSHARP_LANGUAGES,
         extract: extract_csharp_entry,
+    },
+    LanguageExtractor {
+        name: "php_ruby",
+        languages: PHP_RUBY_LANGUAGES,
+        extract: extract_php_ruby_entry,
     },
     LanguageExtractor {
         name: "generic",
@@ -304,6 +308,18 @@ fn extract_csharp_entry(
     refs: &mut Vec<UnresolvedReference>,
 ) {
     extract_csharp(file_path, source, now, nodes, edges, refs);
+}
+
+fn extract_php_ruby_entry(
+    file_path: &str,
+    source: &str,
+    language: Language,
+    now: i64,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+    refs: &mut Vec<UnresolvedReference>,
+) {
+    extract_php_ruby(file_path, source, language, now, nodes, edges, refs);
 }
 
 fn extract_generic_entry(
@@ -1614,6 +1630,515 @@ fn add_csharp_call_refs(
                 0,
             );
         }
+    }
+}
+
+fn extract_php_ruby(
+    file_path: &str,
+    source: &str,
+    language: Language,
+    now: i64,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+    refs: &mut Vec<UnresolvedReference>,
+) {
+    match language {
+        Language::Php => extract_php(file_path, source, now, nodes, edges, refs),
+        Language::Ruby => extract_ruby(file_path, source, now, nodes, edges, refs),
+        _ => {}
+    }
+}
+
+fn extract_php(
+    file_path: &str,
+    source: &str,
+    now: i64,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+    refs: &mut Vec<UnresolvedReference>,
+) {
+    add_php_uses(file_path, source, now, nodes, edges, refs);
+    add_php_symbols(file_path, source, now, nodes, edges, refs);
+    add_php_call_refs(file_path, source, nodes, refs);
+}
+
+fn add_php_uses(
+    file_path: &str,
+    source: &str,
+    now: i64,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+    refs: &mut Vec<UnresolvedReference>,
+) {
+    let single_re =
+        Regex::new(r"(?m)^\s*use\s+((?:function\s+|const\s+)?[A-Za-z_\\][A-Za-z0-9_\\]*)(?:\s+as\s+[A-Za-z_][A-Za-z0-9_]*)?\s*;")
+            .unwrap();
+    for cap in single_re.captures_iter(source) {
+        let module = cap.get(1).unwrap().as_str().trim();
+        add_php_import_node(
+            file_path,
+            module,
+            cap.get(0).unwrap().as_str().trim(),
+            line_for(source, cap.get(1).unwrap().start()),
+            now,
+            nodes,
+            edges,
+            refs,
+        );
+    }
+
+    let group_re =
+        Regex::new(r"(?ms)^\s*use\s+([A-Za-z_\\][A-Za-z0-9_\\]*)\\\s*\{(?P<body>.*?)\}\s*;")
+            .unwrap();
+    let item_re =
+        Regex::new(r"(?m)([A-Za-z_][A-Za-z0-9_]*)(?:\s+as\s+[A-Za-z_][A-Za-z0-9_]*)?").unwrap();
+    for cap in group_re.captures_iter(source) {
+        let prefix = cap.get(1).unwrap().as_str();
+        let Some(body) = cap.name("body") else {
+            continue;
+        };
+        for item in item_re.captures_iter(body.as_str()) {
+            let leaf = item.get(1).unwrap();
+            let module = format!("{prefix}\\{}", leaf.as_str());
+            add_php_import_node(
+                file_path,
+                &module,
+                item.get(0).unwrap().as_str().trim(),
+                line_for(source, body.start() + leaf.start()),
+                now,
+                nodes,
+                edges,
+                refs,
+            );
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn add_php_import_node(
+    file_path: &str,
+    module: &str,
+    signature: &str,
+    line: i64,
+    now: i64,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+    refs: &mut Vec<UnresolvedReference>,
+) {
+    let Some(file_id) = nodes.first().map(|node| node.id.clone()) else {
+        return;
+    };
+    let node = make_node(
+        file_path,
+        Language::Php,
+        NodeKind::Import,
+        module,
+        line,
+        0,
+        now,
+        Some(signature.to_string()),
+    );
+    add_contains(nodes, edges, &node);
+    refs_push(
+        refs,
+        &file_id,
+        module,
+        EdgeKind::Imports,
+        file_path,
+        Language::Php,
+        line,
+        0,
+    );
+    nodes.push(node);
+}
+
+fn add_php_symbols(
+    file_path: &str,
+    source: &str,
+    now: i64,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+    refs: &mut Vec<UnresolvedReference>,
+) {
+    let type_re = Regex::new(
+        r"^\s*(?:(abstract|final)\s+)?(class|interface|trait|enum)\s+([A-Za-z_][A-Za-z0-9_]*)([^{]*)\{?",
+    )
+    .unwrap();
+    let function_re = Regex::new(
+        r"^\s*(?:(public|private|protected)\s+)?((?:static|abstract|final)\s+)*function\s+([A-Za-z_][A-Za-z0-9_]*)\s*\([^)]*\)",
+    )
+    .unwrap();
+    let mut type_stack: Vec<(usize, String, String)> = Vec::new();
+
+    for (idx, line) in source.lines().enumerate() {
+        let line_no = idx as i64 + 1;
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with("//") || trimmed.starts_with('#') {
+            continue;
+        }
+        let indent = python_indent_width(line);
+        while type_stack
+            .last()
+            .is_some_and(|(type_indent, _, _)| indent <= *type_indent && trimmed.starts_with('}'))
+        {
+            type_stack.pop();
+        }
+
+        if let Some(cap) = type_re.captures(line) {
+            let kind = match cap.get(2).unwrap().as_str() {
+                "interface" => NodeKind::Interface,
+                "trait" => NodeKind::Trait,
+                "enum" => NodeKind::Enum,
+                _ => NodeKind::Class,
+            };
+            let name = cap.get(3).unwrap();
+            let mut node = make_node(
+                file_path,
+                Language::Php,
+                kind,
+                name.as_str(),
+                line_no,
+                indent as i64,
+                now,
+                Some(trimmed.to_string()),
+            );
+            node.visibility = Some("public".to_string());
+            node.is_exported = true;
+            add_contains(nodes, edges, &node);
+            add_php_inheritance_refs(
+                &node.id,
+                cap.get(4).map(|m| m.as_str()).unwrap_or_default(),
+                file_path,
+                line_no,
+                refs,
+            );
+            type_stack.push((indent, name.as_str().to_string(), node.id.clone()));
+            nodes.push(node);
+            continue;
+        }
+
+        if let Some(cap) = function_re.captures(line) {
+            let name = cap.get(3).unwrap().as_str();
+            let kind = if type_stack.is_empty() {
+                NodeKind::Function
+            } else {
+                NodeKind::Method
+            };
+            let mut node = make_node(
+                file_path,
+                Language::Php,
+                kind,
+                name,
+                line_no,
+                indent as i64,
+                now,
+                Some(trimmed.to_string()),
+            );
+            node.visibility = cap
+                .get(1)
+                .map(|m| m.as_str().to_string())
+                .or_else(|| Some("public".to_string()));
+            node.is_exported = node.visibility.as_deref() == Some("public");
+            node.is_static = cap
+                .get(2)
+                .map(|m| m.as_str().contains("static"))
+                .unwrap_or(false)
+                || trimmed.contains(" static ");
+            if let Some((_, type_name, parent_id)) = type_stack.last() {
+                node.qualified_name = format!("{}::{}", type_name, name);
+                edges.push(Edge {
+                    id: None,
+                    source: parent_id.clone(),
+                    target: node.id.clone(),
+                    kind: EdgeKind::Contains,
+                    line: None,
+                    col: None,
+                    provenance: Some("php".into()),
+                });
+            } else {
+                add_contains(nodes, edges, &node);
+            }
+            nodes.push(node);
+            continue;
+        }
+
+        if trimmed.starts_with("use ") && !type_stack.is_empty() {
+            let Some((_, _, parent_id)) = type_stack.last() else {
+                continue;
+            };
+            for name in trimmed
+                .trim_start_matches("use ")
+                .trim_end_matches(';')
+                .split(',')
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+            {
+                refs_push(
+                    refs,
+                    parent_id,
+                    name,
+                    EdgeKind::Implements,
+                    file_path,
+                    Language::Php,
+                    line_no,
+                    0,
+                );
+            }
+        }
+    }
+}
+
+fn add_php_inheritance_refs(
+    node_id: &str,
+    tail: &str,
+    file_path: &str,
+    line: i64,
+    refs: &mut Vec<UnresolvedReference>,
+) {
+    let extends_re = Regex::new(r"\bextends\s+([A-Za-z_\\][A-Za-z0-9_\\]*)").unwrap();
+    let implements_re = Regex::new(r"\bimplements\s+([A-Za-z_\\][A-Za-z0-9_\\,\s]*)").unwrap();
+    if let Some(cap) = extends_re.captures(tail) {
+        refs_push(
+            refs,
+            node_id,
+            cap.get(1).unwrap().as_str(),
+            EdgeKind::Extends,
+            file_path,
+            Language::Php,
+            line,
+            0,
+        );
+    }
+    if let Some(cap) = implements_re.captures(tail) {
+        for name in cap[1]
+            .split(',')
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+        {
+            refs_push(
+                refs,
+                node_id,
+                name,
+                EdgeKind::Implements,
+                file_path,
+                Language::Php,
+                line,
+                0,
+            );
+        }
+    }
+}
+
+fn add_php_call_refs(
+    file_path: &str,
+    source: &str,
+    nodes: &[Node],
+    refs: &mut Vec<UnresolvedReference>,
+) {
+    let re = Regex::new(r"([A-Za-z_\\][A-Za-z0-9_\\]*(?:::[A-Za-z_][A-Za-z0-9_]*)?)\s*\(").unwrap();
+    let keywords = [
+        "if", "for", "foreach", "while", "switch", "catch", "return", "function",
+    ];
+    for cap in re.captures_iter(source) {
+        let name_match = cap.get(1).unwrap();
+        let name = name_match.as_str();
+        let line = line_for(source, name_match.start());
+        let line_text = source
+            .lines()
+            .nth(line.saturating_sub(1) as usize)
+            .unwrap_or_default()
+            .trim_start();
+        if keywords.contains(&name) || line_text.contains(&format!("function {name}(")) {
+            continue;
+        }
+        if let Some(caller) = nodes
+            .iter()
+            .filter(|n| matches!(n.kind, NodeKind::Function | NodeKind::Method))
+            .rev()
+            .find(|n| n.start_line <= line)
+        {
+            refs_push(
+                refs,
+                &caller.id,
+                name,
+                EdgeKind::Calls,
+                file_path,
+                Language::Php,
+                line,
+                0,
+            );
+        }
+    }
+}
+
+fn extract_ruby(
+    file_path: &str,
+    source: &str,
+    now: i64,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+    refs: &mut Vec<UnresolvedReference>,
+) {
+    let import_re = Regex::new(r#"^\s*(require|require_relative)\s+["']([^"']+)["']"#).unwrap();
+    let module_re = Regex::new(r"^\s*module\s+([A-Z][A-Za-z0-9_:]*)").unwrap();
+    let class_re =
+        Regex::new(r"^\s*class\s+([A-Z][A-Za-z0-9_:]*)(?:\s*<\s*([A-Z][A-Za-z0-9_:]*))?").unwrap();
+    let method_re = Regex::new(r"^\s*def\s+(?:(self)\.)?([A-Za-z_][A-Za-z0-9_!?=]*)").unwrap();
+    let mut stack: Vec<(usize, NodeKind, String, String)> = Vec::new();
+
+    for (idx, line) in source.lines().enumerate() {
+        let line_no = idx as i64 + 1;
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let indent = python_indent_width(line);
+        if trimmed == "end" {
+            stack.pop();
+            continue;
+        }
+
+        if let Some(cap) = import_re.captures(line) {
+            let module = cap.get(2).unwrap();
+            let node = make_node(
+                file_path,
+                Language::Ruby,
+                NodeKind::Import,
+                module.as_str(),
+                line_no,
+                indent as i64,
+                now,
+                Some(trimmed.to_string()),
+            );
+            add_contains(nodes, edges, &node);
+            refs_push(
+                refs,
+                &nodes[0].id,
+                module.as_str(),
+                EdgeKind::Imports,
+                file_path,
+                Language::Ruby,
+                line_no,
+                0,
+            );
+            nodes.push(node);
+            continue;
+        }
+
+        if let Some(cap) = module_re.captures(line) {
+            let name = cap.get(1).unwrap();
+            let node = make_node(
+                file_path,
+                Language::Ruby,
+                NodeKind::Module,
+                name.as_str(),
+                line_no,
+                indent as i64,
+                now,
+                Some(trimmed.to_string()),
+            );
+            add_contains_from_ruby_stack(nodes, edges, &stack, &node);
+            stack.push((
+                indent,
+                NodeKind::Module,
+                name.as_str().to_string(),
+                node.id.clone(),
+            ));
+            nodes.push(node);
+            continue;
+        }
+
+        if let Some(cap) = class_re.captures(line) {
+            let name = cap.get(1).unwrap();
+            let node = make_node(
+                file_path,
+                Language::Ruby,
+                NodeKind::Class,
+                name.as_str(),
+                line_no,
+                indent as i64,
+                now,
+                Some(trimmed.to_string()),
+            );
+            add_contains_from_ruby_stack(nodes, edges, &stack, &node);
+            if let Some(parent) = cap.get(2) {
+                refs_push(
+                    refs,
+                    &node.id,
+                    parent.as_str(),
+                    EdgeKind::Extends,
+                    file_path,
+                    Language::Ruby,
+                    line_no,
+                    0,
+                );
+            }
+            stack.push((
+                indent,
+                NodeKind::Class,
+                name.as_str().to_string(),
+                node.id.clone(),
+            ));
+            nodes.push(node);
+            continue;
+        }
+
+        if let Some(cap) = method_re.captures(line) {
+            let name = cap.get(2).unwrap().as_str();
+            let mut node = make_node(
+                file_path,
+                Language::Ruby,
+                NodeKind::Method,
+                name,
+                line_no,
+                indent as i64,
+                now,
+                Some(trimmed.to_string()),
+            );
+            node.visibility = Some("public".to_string());
+            node.is_exported = true;
+            node.is_static = cap.get(1).is_some();
+            if let Some((_, _, owner_name, _)) = stack
+                .iter()
+                .rev()
+                .find(|(_, kind, _, _)| matches!(kind, NodeKind::Class | NodeKind::Module))
+            {
+                let sep = if node.is_static { "." } else { "#" };
+                node.qualified_name = format!("{owner_name}{sep}{name}");
+            }
+            add_contains_from_ruby_stack(nodes, edges, &stack, &node);
+            nodes.push(node);
+        }
+    }
+
+    add_call_refs(
+        file_path,
+        source,
+        Language::Ruby,
+        nodes,
+        refs,
+        r"([A-Za-z_][A-Za-z0-9_!?=]*)\s*\(",
+    );
+}
+
+fn add_contains_from_ruby_stack(
+    nodes: &[Node],
+    edges: &mut Vec<Edge>,
+    stack: &[(usize, NodeKind, String, String)],
+    node: &Node,
+) {
+    if let Some((_, _, _, source)) = stack.last() {
+        edges.push(Edge {
+            id: None,
+            source: source.clone(),
+            target: node.id.clone(),
+            kind: EdgeKind::Contains,
+            line: None,
+            col: None,
+            provenance: Some("ruby".into()),
+        });
+    } else {
+        add_contains(nodes, edges, node);
     }
 }
 
