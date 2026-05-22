@@ -1,4 +1,6 @@
-use crate::types::{Node, NodeEdge, SearchOptions};
+use crate::types::{
+    FileListFormat, FileListOptions, FileListReport, Node, NodeEdge, SearchOptions,
+};
 use crate::{find_nearest_codegraph_root, CodeGraph};
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
@@ -309,19 +311,31 @@ impl MCPServer {
                 )))
             }
             "codegraph_files" => {
-                let path_filter = args.get("path").and_then(Value::as_str).unwrap_or("");
-                let files = cg.get_all_files()?;
-                let lines = files
-                    .into_iter()
-                    .filter(|f| path_filter.is_empty() || f.path.starts_with(path_filter))
-                    .map(|f| format!("{} ({}, {} symbols)", f.path, f.language, f.node_count))
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                Ok(text_result(if lines.is_empty() {
-                    "No files indexed. Run `codegraph index` first.".into()
-                } else {
-                    lines
-                }))
+                let format = args
+                    .get("format")
+                    .and_then(Value::as_str)
+                    .unwrap_or("tree")
+                    .parse::<FileListFormat>()
+                    .map_err(|_| {
+                        anyhow!("codegraph_files format must be grouped, flat, or tree")
+                    })?;
+                let report = cg.list_files(FileListOptions {
+                    format,
+                    path_filter: args.get("path").and_then(Value::as_str).map(str::to_string),
+                    pattern: args
+                        .get("pattern")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                    include_metadata: args
+                        .get("includeMetadata")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
+                    max_depth: args
+                        .get("maxDepth")
+                        .and_then(Value::as_i64)
+                        .map(|depth| clamp(depth, 1, 20) as usize),
+                })?;
+                Ok(text_result(format_file_report(&report)))
             }
             "codegraph_affected" => {
                 let files = required_string_array(args, "files")?;
@@ -546,6 +560,74 @@ fn format_paths(from: &str, to: &str, paths: &[crate::types::GraphPath]) -> Stri
         );
     }
     lines.join("\n")
+}
+
+fn format_file_report(report: &FileListReport) -> String {
+    if report.total_files == 0 {
+        return "No indexed files matched.".to_string();
+    }
+    match report.format.as_str() {
+        "flat" => report
+            .files
+            .iter()
+            .map(format_file_entry)
+            .collect::<Vec<_>>()
+            .join("\n"),
+        "grouped" => report
+            .groups
+            .iter()
+            .map(|group| {
+                let mut lines = vec![format!("{}: {}", group.language, group.count)];
+                for file in &group.files {
+                    lines.push(format!("  {}", format_file_entry(file)));
+                }
+                lines.join("\n")
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => {
+            let mut lines = Vec::new();
+            for entry in &report.tree {
+                push_tree_entry(entry, 0, &mut lines);
+            }
+            lines.join("\n")
+        }
+    }
+}
+
+fn format_file_entry(file: &crate::types::FileListEntry) -> String {
+    let mut out = format!(
+        "{} ({}, {} symbols)",
+        file.path, file.language, file.node_count
+    );
+    if let Some(size) = file.size {
+        out.push_str(&format!(", {size} bytes"));
+    }
+    out
+}
+
+fn push_tree_entry(entry: &crate::types::FileTreeEntry, depth: usize, lines: &mut Vec<String>) {
+    let indent = "  ".repeat(depth);
+    if entry.kind == "dir" {
+        lines.push(format!("{indent}{}/", entry.name));
+        for child in &entry.children {
+            push_tree_entry(child, depth + 1, lines);
+        }
+    } else {
+        let mut line = format!(
+            "{indent}{} ({}, {} symbols)",
+            entry.name,
+            entry
+                .language
+                .map(|lang| lang.as_str())
+                .unwrap_or("unknown"),
+            entry.node_count.unwrap_or_default()
+        );
+        if let Some(size) = entry.size {
+            line.push_str(&format!(", {size} bytes"));
+        }
+        lines.push(line);
+    }
 }
 
 fn text_result(text: String) -> Value {

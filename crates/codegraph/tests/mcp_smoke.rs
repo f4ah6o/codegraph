@@ -114,6 +114,26 @@ fn mcp_lists_and_calls_status() {
             })
         )
         .unwrap();
+        writeln!(
+            stdin,
+            "{}",
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 7,
+                "method": "tools/call",
+                "params": {
+                    "name": "codegraph_files",
+                    "arguments": {
+                        "format": "tree",
+                        "path": "src",
+                        "pattern": "*.rs",
+                        "includeMetadata": true,
+                        "maxDepth": 2
+                    }
+                }
+            })
+        )
+        .unwrap();
     }
 
     drop(child.stdin.take());
@@ -163,4 +183,10 @@ fn mcp_lists_and_calls_status() {
         affected["debug"][0]["matchedBy"]["directTestInput"],
         Value::Array(vec![Value::String("src/lib.test.rs".into())])
     );
+    let files_text = responses[6]["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap();
+    assert!(files_text.contains("src/"), "{files_text}");
+    assert!(files_text.contains("lib.rs (rust"), "{files_text}");
+    assert!(files_text.contains("bytes"), "{files_text}");
 }

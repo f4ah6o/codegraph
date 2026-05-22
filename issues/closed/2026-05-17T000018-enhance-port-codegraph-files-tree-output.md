@@ -1,6 +1,7 @@
 # Port codegraph files tree output
 
 Created: 2026-05-17
+Completed: 2026-05-22
 Model: GPT-5 Codex
 
 ## 背景
@@ -25,3 +26,10 @@ original の `codegraph_files` は indexed files を tree/flat/grouped format、
 - MCP `codegraph_files` smoke test
 - `cargo test --all --all-features`
 
+## 解決方法
+
+- `CodeGraph::list_files` と file list report 型を追加し、`tree`、`flat`、`grouped` format を共有 API として扱えるようにした。
+- path filter、pattern filter、metadata 表示、max depth を bounded に処理するようにした。
+- `cgz files` に `--format`、`--filter-path`、`--pattern`、`--include-metadata`、`--max-depth` を追加し、新しい option を指定した JSON 出力は report 形式にした。既存の `cgz files --json` は language counts のまま維持した。
+- MCP `codegraph_files` で同じ format/filter/metadata/depth option を利用し、format は `tree`、`flat`、`grouped` に限定して曖昧な指定を error にした。
+- `crates/codegraph/tests/files_output.rs` と MCP smoke test を追加・更新し、`cargo test --all --all-features` で確認した。

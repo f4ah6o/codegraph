@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Result};
 use clap::{Parser, Subcommand};
-use codegraph::types::SearchOptions;
+use codegraph::types::{FileListFormat, FileListOptions, FileListReport, SearchOptions};
 use codegraph::{find_nearest_codegraph_root, is_initialized, CodeGraph};
 use std::path::PathBuf;
 
@@ -53,6 +53,16 @@ enum Command {
     Files {
         #[arg(short, long)]
         path: Option<PathBuf>,
+        #[arg(long, default_value = "grouped")]
+        format: String,
+        #[arg(long)]
+        filter_path: Option<String>,
+        #[arg(long)]
+        pattern: Option<String>,
+        #[arg(long)]
+        include_metadata: bool,
+        #[arg(long)]
+        max_depth: Option<usize>,
         #[arg(short, long)]
         json: bool,
     },
@@ -242,19 +252,43 @@ fn main() -> Result<()> {
                 }
             }
         }
-        Command::Files { path, json } => {
+        Command::Files {
+            path,
+            format,
+            filter_path,
+            pattern,
+            include_metadata,
+            max_depth,
+            json,
+        } => {
             let root = resolve_root(path)?;
             let cg = CodeGraph::open(root)?;
-            let stats = cg.stats()?;
-            if json {
+            let legacy_json = json
+                && format == "grouped"
+                && filter_path.is_none()
+                && pattern.is_none()
+                && !include_metadata
+                && max_depth.is_none();
+            let format = format
+                .parse::<FileListFormat>()
+                .map_err(|_| anyhow!("files --format must be grouped, flat, or tree"))?;
+            let report = cg.list_files(FileListOptions {
+                format,
+                path_filter: filter_path,
+                pattern,
+                include_metadata,
+                max_depth,
+            })?;
+            if legacy_json {
+                let stats = cg.stats()?;
                 println!(
                     "{}",
                     serde_json::to_string_pretty(&stats.files_by_language)?
                 );
+            } else if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
             } else {
-                for (lang, count) in stats.files_by_language {
-                    println!("{lang}: {count}");
-                }
+                println!("{}", format_file_report(&report));
             }
         }
         Command::Context { task, path, json } => {
@@ -454,6 +488,74 @@ fn format_path(path: &codegraph::types::GraphPath) -> String {
         .map(format_cli_node)
         .collect::<Vec<_>>()
         .join("\n  -> ")
+}
+
+fn format_file_report(report: &FileListReport) -> String {
+    if report.total_files == 0 {
+        return "No indexed files matched.".to_string();
+    }
+    match report.format.as_str() {
+        "flat" => report
+            .files
+            .iter()
+            .map(format_file_entry)
+            .collect::<Vec<_>>()
+            .join("\n"),
+        "tree" => {
+            let mut lines = Vec::new();
+            for entry in &report.tree {
+                push_tree_entry(entry, 0, &mut lines);
+            }
+            lines.join("\n")
+        }
+        _ => report
+            .groups
+            .iter()
+            .map(|group| {
+                let mut lines = vec![format!("{}: {}", group.language, group.count)];
+                for file in &group.files {
+                    lines.push(format!("  {}", format_file_entry(file)));
+                }
+                lines.join("\n")
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+    }
+}
+
+fn format_file_entry(file: &codegraph::types::FileListEntry) -> String {
+    let mut out = format!(
+        "{} ({}, {} symbols)",
+        file.path, file.language, file.node_count
+    );
+    if let Some(size) = file.size {
+        out.push_str(&format!(", {size} bytes"));
+    }
+    out
+}
+
+fn push_tree_entry(entry: &codegraph::types::FileTreeEntry, depth: usize, lines: &mut Vec<String>) {
+    let indent = "  ".repeat(depth);
+    if entry.kind == "dir" {
+        lines.push(format!("{indent}{}/", entry.name));
+        for child in &entry.children {
+            push_tree_entry(child, depth + 1, lines);
+        }
+    } else {
+        let mut line = format!(
+            "{indent}{} ({}, {} symbols)",
+            entry.name,
+            entry
+                .language
+                .map(|lang| lang.as_str())
+                .unwrap_or("unknown"),
+            entry.node_count.unwrap_or_default()
+        );
+        if let Some(size) = entry.size {
+            line.push_str(&format!(", {size} bytes"));
+        }
+        lines.push(line);
+    }
 }
 
 fn resolve_root(path: Option<PathBuf>) -> Result<PathBuf> {

@@ -16,8 +16,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use types::{
     AffectedDebugEntry, AffectedMatchSources, AffectedReport, ContextFileSummary, ContextMatch,
-    ContextReport, ContextSymbolSummary, FileRecord, GraphPath, GraphStats, IndexResult, Language,
-    Node, NodeEdge, SearchOptions, SearchResult,
+    ContextReport, ContextSymbolSummary, FileLanguageGroup, FileListEntry, FileListFormat,
+    FileListOptions, FileListReport, FileRecord, FileTreeEntry, GraphPath, GraphStats, IndexResult,
+    Language, Node, NodeEdge, SearchOptions, SearchResult,
 };
 
 pub const CODEGRAPH_DIR: &str = ".codegraph";
@@ -158,6 +159,64 @@ impl CodeGraph {
 
     pub fn get_all_files(&self) -> Result<Vec<FileRecord>> {
         self.db.get_all_files()
+    }
+
+    pub fn list_files(&self, options: FileListOptions) -> Result<FileListReport> {
+        let max_depth = options.max_depth.map(|depth| depth.clamp(1, 20));
+        let mut files = self
+            .get_all_files()?
+            .into_iter()
+            .filter(|file| {
+                options
+                    .path_filter
+                    .as_deref()
+                    .map(|path| file_path_matches_filter(path, &file.path))
+                    .unwrap_or(true)
+            })
+            .filter(|file| {
+                options
+                    .pattern
+                    .as_deref()
+                    .map(|pattern| file_pattern_matches(pattern, &file.path))
+                    .unwrap_or(true)
+            })
+            .filter(|file| {
+                max_depth
+                    .map(|depth| file.path.split('/').count() <= depth)
+                    .unwrap_or(true)
+            })
+            .map(|file| file_list_entry(file, options.include_metadata))
+            .collect::<Vec<_>>();
+        files.sort_by(|a, b| a.path.cmp(&b.path));
+
+        let groups = if options.format == FileListFormat::Grouped {
+            grouped_file_entries(&files)
+        } else {
+            Vec::new()
+        };
+        let tree = if options.format == FileListFormat::Tree {
+            build_file_tree(&files)
+        } else {
+            Vec::new()
+        };
+        let format = match options.format {
+            FileListFormat::Grouped => "grouped",
+            FileListFormat::Flat => "flat",
+            FileListFormat::Tree => "tree",
+        }
+        .to_string();
+
+        Ok(FileListReport {
+            format,
+            path_filter: options.path_filter,
+            pattern: options.pattern,
+            include_metadata: options.include_metadata,
+            max_depth,
+            total_files: files.len(),
+            files,
+            groups,
+            tree,
+        })
     }
 
     pub fn build_affected_report(&self, files: &[String]) -> Result<AffectedReport> {
@@ -433,6 +492,127 @@ impl CodeGraph {
         out.sort();
         Ok(out)
     }
+}
+
+fn file_list_entry(file: FileRecord, include_metadata: bool) -> FileListEntry {
+    FileListEntry {
+        path: file.path,
+        language: file.language,
+        node_count: file.node_count,
+        size: include_metadata.then_some(file.size),
+        modified_at: include_metadata.then_some(file.modified_at),
+        indexed_at: include_metadata.then_some(file.indexed_at),
+    }
+}
+
+fn file_path_matches_filter(filter: &str, path: &str) -> bool {
+    let filter = filter.trim_matches('/');
+    filter.is_empty() || path == filter || path.starts_with(&format!("{filter}/"))
+}
+
+fn grouped_file_entries(files: &[FileListEntry]) -> Vec<FileLanguageGroup> {
+    let mut grouped: BTreeMap<String, (Language, Vec<FileListEntry>)> = BTreeMap::new();
+    for file in files {
+        grouped
+            .entry(file.language.as_str().to_string())
+            .or_insert_with(|| (file.language, Vec::new()))
+            .1
+            .push(file.clone());
+    }
+    grouped
+        .into_values()
+        .map(|(language, files)| FileLanguageGroup {
+            language,
+            count: files.len(),
+            files,
+        })
+        .collect()
+}
+
+fn build_file_tree(files: &[FileListEntry]) -> Vec<FileTreeEntry> {
+    let mut roots = Vec::new();
+    for file in files {
+        insert_tree_file(
+            &mut roots,
+            file,
+            &file.path.split('/').collect::<Vec<_>>(),
+            0,
+            "",
+        );
+    }
+    roots
+}
+
+fn insert_tree_file(
+    entries: &mut Vec<FileTreeEntry>,
+    file: &FileListEntry,
+    parts: &[&str],
+    index: usize,
+    parent: &str,
+) {
+    let Some(name) = parts.get(index) else {
+        return;
+    };
+    let path = if parent.is_empty() {
+        (*name).to_string()
+    } else {
+        format!("{parent}/{name}")
+    };
+    let is_file = index + 1 == parts.len();
+    let pos = entries
+        .iter()
+        .position(|entry| entry.name == *name && entry.kind == if is_file { "file" } else { "dir" })
+        .unwrap_or_else(|| {
+            entries.push(FileTreeEntry {
+                name: (*name).to_string(),
+                path: path.clone(),
+                kind: if is_file { "file" } else { "dir" }.to_string(),
+                language: is_file.then_some(file.language),
+                node_count: is_file.then_some(file.node_count),
+                size: file.size.filter(|_| is_file),
+                children: Vec::new(),
+            });
+            entries.len() - 1
+        });
+    if !is_file {
+        insert_tree_file(&mut entries[pos].children, file, parts, index + 1, &path);
+    }
+    entries.sort_by(|a, b| {
+        a.kind
+            .cmp(&b.kind)
+            .then_with(|| a.name.cmp(&b.name))
+            .then_with(|| a.path.cmp(&b.path))
+    });
+}
+
+fn file_pattern_matches(pattern: &str, path: &str) -> bool {
+    if pattern.is_empty() {
+        return true;
+    }
+    if let Some(ext) = pattern.strip_prefix("*.") {
+        return path.ends_with(&format!(".{ext}"));
+    }
+    if let Some(ext) = pattern.strip_prefix("**/*.") {
+        return path.ends_with(&format!(".{ext}"));
+    }
+    if pattern.contains('*') {
+        let parts = pattern.split('*').collect::<Vec<_>>();
+        let mut rest = path;
+        for (idx, part) in parts.iter().enumerate() {
+            if part.is_empty() {
+                continue;
+            }
+            if idx == 0 && !rest.starts_with(part) {
+                return false;
+            }
+            let Some(found) = rest.find(part) else {
+                return false;
+            };
+            rest = &rest[found + part.len()..];
+        }
+        return pattern.ends_with('*') || parts.last().is_some_and(|suffix| path.ends_with(suffix));
+    }
+    path.contains(pattern)
 }
 
 fn context_search_terms(task: &str) -> Vec<String> {

@@ -267,6 +267,79 @@ pub struct FileRecord {
     pub node_count: i64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileListFormat {
+    Grouped,
+    Flat,
+    Tree,
+}
+
+impl std::str::FromStr for FileListFormat {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
+            "grouped" => Self::Grouped,
+            "flat" => Self::Flat,
+            "tree" => Self::Tree,
+            _ => return Err(()),
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct FileListOptions {
+    pub format: FileListFormat,
+    pub path_filter: Option<String>,
+    pub pattern: Option<String>,
+    pub include_metadata: bool,
+    pub max_depth: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileListReport {
+    pub format: String,
+    pub path_filter: Option<String>,
+    pub pattern: Option<String>,
+    pub include_metadata: bool,
+    pub max_depth: Option<usize>,
+    pub total_files: usize,
+    pub files: Vec<FileListEntry>,
+    pub groups: Vec<FileLanguageGroup>,
+    pub tree: Vec<FileTreeEntry>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileListEntry {
+    pub path: String,
+    pub language: Language,
+    pub node_count: i64,
+    pub size: Option<u64>,
+    pub modified_at: Option<i64>,
+    pub indexed_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FileLanguageGroup {
+    pub language: Language,
+    pub count: usize,
+    pub files: Vec<FileListEntry>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileTreeEntry {
+    pub name: String,
+    pub path: String,
+    pub kind: String,
+    pub language: Option<Language>,
+    pub node_count: Option<i64>,
+    pub size: Option<u64>,
+    pub children: Vec<FileTreeEntry>,
+}
+
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct IndexResult {
     pub success: bool,
