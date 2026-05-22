@@ -111,6 +111,7 @@ cgz context <task> -j  # print context evidence as JSON
 cgz affected <files>   # print affected test files from import dependents
 cgz affected <files> -j # print affected test evidence as JSON
 cgz serve --mcp        # start the MCP server
+cgz watch [path]       # watch source files and debounce incremental sync
 cgz unlock [path]      # remove .codegraph/codegraph.lock
 ```
 

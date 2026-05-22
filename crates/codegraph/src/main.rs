@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Result};
 use clap::{Parser, Subcommand};
 use codegraph::types::{FileListFormat, FileListOptions, FileListReport, SearchOptions};
+use codegraph::watcher::{run_watcher, WatcherConfig};
 use codegraph::{find_nearest_codegraph_root, is_initialized, CodeGraph};
 use std::path::PathBuf;
 
@@ -133,6 +134,11 @@ enum Command {
     },
     Unlock {
         path: Option<PathBuf>,
+    },
+    Watch {
+        path: Option<PathBuf>,
+        #[arg(short, long, default_value_t = 300)]
+        debounce: u64,
     },
     Install,
 }
@@ -435,6 +441,15 @@ fn main() -> Result<()> {
                 std::fs::remove_file(lock)?;
             }
             println!("Unlocked");
+        }
+        Command::Watch { path, debounce } => {
+            let root = path.unwrap_or(std::env::current_dir()?);
+            run_watcher(
+                root,
+                WatcherConfig {
+                    debounce_ms: debounce,
+                },
+            )?;
         }
         Command::Install => {
             println!(

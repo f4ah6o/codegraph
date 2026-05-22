@@ -4,6 +4,7 @@ pub mod extraction;
 pub mod graph;
 pub mod mcp;
 pub mod types;
+pub mod watcher;
 
 use anyhow::{anyhow, Context, Result};
 use config::{load_config, save_config, CodeGraphConfig};
@@ -61,6 +62,10 @@ impl CodeGraph {
 
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    pub fn config(&self) -> &CodeGraphConfig {
+        &self.config
     }
 
     pub fn index_all(&mut self) -> Result<IndexResult> {
