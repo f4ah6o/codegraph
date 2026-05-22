@@ -24,6 +24,7 @@ struct LanguageExtractor {
 const RUST_LANGUAGES: &[Language] = &[Language::Rust];
 const MOONBIT_LANGUAGES: &[Language] = &[Language::MoonBit];
 const PYTHON_LANGUAGES: &[Language] = &[Language::Python];
+const GO_LANGUAGES: &[Language] = &[Language::Go];
 const TYPESCRIPT_JAVASCRIPT_LANGUAGES: &[Language] = &[
     Language::TypeScript,
     Language::Tsx,
@@ -31,7 +32,6 @@ const TYPESCRIPT_JAVASCRIPT_LANGUAGES: &[Language] = &[
     Language::Jsx,
 ];
 const GENERIC_LANGUAGES: &[Language] = &[
-    Language::Go,
     Language::Java,
     Language::C,
     Language::Cpp,
@@ -69,6 +69,11 @@ const LANGUAGE_EXTRACTORS: &[LanguageExtractor] = &[
         name: "python",
         languages: PYTHON_LANGUAGES,
         extract: extract_python_entry,
+    },
+    LanguageExtractor {
+        name: "go",
+        languages: GO_LANGUAGES,
+        extract: extract_go_entry,
     },
     LanguageExtractor {
         name: "generic",
@@ -254,6 +259,18 @@ fn extract_python_entry(
     refs: &mut Vec<UnresolvedReference>,
 ) {
     extract_python(file_path, source, now, nodes, edges, refs);
+}
+
+fn extract_go_entry(
+    file_path: &str,
+    source: &str,
+    _language: Language,
+    now: i64,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+    refs: &mut Vec<UnresolvedReference>,
+) {
+    extract_go(file_path, source, now, nodes, edges, refs);
 }
 
 fn extract_generic_entry(
@@ -680,6 +697,251 @@ fn python_indent_width(line: &str) -> usize {
         .take_while(|ch| matches!(ch, ' ' | '\t'))
         .map(|ch| if ch == '\t' { 4 } else { 1 })
         .sum()
+}
+
+fn extract_go(
+    file_path: &str,
+    source: &str,
+    now: i64,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+    refs: &mut Vec<UnresolvedReference>,
+) {
+    let package_re = Regex::new(r"(?m)^\s*package\s+([A-Za-z_][A-Za-z0-9_]*)").unwrap();
+    if let Some(cap) = package_re.captures(source) {
+        let package = cap.get(1).unwrap();
+        let node = make_node(
+            file_path,
+            Language::Go,
+            NodeKind::Module,
+            package.as_str(),
+            line_for(source, package.start()),
+            0,
+            now,
+            cap.get(0).map(|m| m.as_str().trim().to_string()),
+        );
+        add_contains(nodes, edges, &node);
+        nodes.push(node);
+    }
+
+    add_go_imports(file_path, source, now, nodes, edges, refs);
+    add_go_types(file_path, source, now, nodes, edges);
+    add_go_functions(file_path, source, now, nodes, edges);
+    add_go_call_refs(file_path, source, nodes, refs);
+}
+
+fn add_go_functions(
+    file_path: &str,
+    source: &str,
+    now: i64,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+) {
+    let method_re = Regex::new(
+        r"(?m)^\s*func\s+\(\s*(?:[A-Za-z_][A-Za-z0-9_]*\s+)?\*?\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)\s*([A-Za-z_][A-Za-z0-9_]*)\s*(\([^)]*\)\s*(?:\([^)]*\)|[A-Za-z_][A-Za-z0-9_\.\[\]]*)?)",
+    )
+    .unwrap();
+    for cap in method_re.captures_iter(source) {
+        let receiver = cap.get(1).unwrap().as_str();
+        let name = cap.get(2).unwrap().as_str();
+        let signature = cap.get(0).map(|m| m.as_str().trim().to_string());
+        let mut node = make_node(
+            file_path,
+            Language::Go,
+            NodeKind::Method,
+            name,
+            line_for(source, cap.get(2).unwrap().start()),
+            0,
+            now,
+            signature,
+        );
+        node.qualified_name = format!("{}.{}", receiver, name);
+        add_contains(nodes, edges, &node);
+        nodes.push(node);
+    }
+
+    let function_re = Regex::new(
+        r"(?m)^\s*func\s+([A-Za-z_][A-Za-z0-9_]*)\s*(\([^)]*\)\s*(?:\([^)]*\)|[A-Za-z_][A-Za-z0-9_\.\[\]]*)?)",
+    )
+    .unwrap();
+    for cap in function_re.captures_iter(source) {
+        let name = cap.get(1).unwrap().as_str();
+        let signature = cap.get(0).map(|m| m.as_str().trim().to_string());
+        let node = make_node(
+            file_path,
+            Language::Go,
+            NodeKind::Function,
+            name,
+            line_for(source, cap.get(1).unwrap().start()),
+            0,
+            now,
+            signature,
+        );
+        add_contains(nodes, edges, &node);
+        nodes.push(node);
+    }
+}
+
+fn add_go_types(
+    file_path: &str,
+    source: &str,
+    now: i64,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+) {
+    let type_re =
+        Regex::new(r"(?m)^\s*type\s+([A-Za-z_][A-Za-z0-9_]*)\s+(struct|interface)\s*\{").unwrap();
+    for cap in type_re.captures_iter(source) {
+        let kind = match cap.get(2).unwrap().as_str() {
+            "struct" => NodeKind::Struct,
+            "interface" => NodeKind::Interface,
+            _ => continue,
+        };
+        let name = cap.get(1).unwrap();
+        let node = make_node(
+            file_path,
+            Language::Go,
+            kind,
+            name.as_str(),
+            line_for(source, name.start()),
+            0,
+            now,
+            cap.get(0).map(|m| m.as_str().trim().to_string()),
+        );
+        add_contains(nodes, edges, &node);
+        nodes.push(node);
+    }
+}
+
+fn add_go_imports(
+    file_path: &str,
+    source: &str,
+    now: i64,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+    refs: &mut Vec<UnresolvedReference>,
+) {
+    let single_re =
+        Regex::new(r#"(?m)^\s*import\s+(?:(\.|_|[A-Za-z_][A-Za-z0-9_]*)\s+)?"([^"]+)""#).unwrap();
+    for cap in single_re.captures_iter(source) {
+        let module = cap.get(2).unwrap();
+        add_go_import_node(
+            file_path,
+            module.as_str(),
+            cap.get(0).unwrap().as_str().trim(),
+            line_for(source, module.start()),
+            now,
+            nodes,
+            edges,
+            refs,
+        );
+    }
+
+    let block_re = Regex::new(r#"(?ms)^\s*import\s*\((?P<body>.*?)\)"#).unwrap();
+    let item_re = Regex::new(r#"(?m)^\s*(?:(\.|_|[A-Za-z_][A-Za-z0-9_]*)\s+)?"([^"]+)""#).unwrap();
+    for block in block_re.captures_iter(source) {
+        let Some(body) = block.name("body") else {
+            continue;
+        };
+        for cap in item_re.captures_iter(body.as_str()) {
+            let module = cap.get(2).unwrap();
+            let absolute_module_start = body.start() + module.start();
+            add_go_import_node(
+                file_path,
+                module.as_str(),
+                cap.get(0).unwrap().as_str().trim(),
+                line_for(source, absolute_module_start),
+                now,
+                nodes,
+                edges,
+                refs,
+            );
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn add_go_import_node(
+    file_path: &str,
+    module: &str,
+    signature: &str,
+    line: i64,
+    now: i64,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+    refs: &mut Vec<UnresolvedReference>,
+) {
+    let Some(file_id) = nodes.first().map(|node| node.id.clone()) else {
+        return;
+    };
+    let node = make_node(
+        file_path,
+        Language::Go,
+        NodeKind::Import,
+        module,
+        line,
+        0,
+        now,
+        Some(signature.to_string()),
+    );
+    add_contains(nodes, edges, &node);
+    refs_push(
+        refs,
+        &file_id,
+        module,
+        EdgeKind::Imports,
+        file_path,
+        Language::Go,
+        line,
+        0,
+    );
+    nodes.push(node);
+}
+
+fn add_go_call_refs(
+    file_path: &str,
+    source: &str,
+    nodes: &[Node],
+    refs: &mut Vec<UnresolvedReference>,
+) {
+    let call_re = Regex::new(r"([A-Za-z_][A-Za-z0-9_\.]*)\s*\(").unwrap();
+    let keywords = [
+        "append", "cap", "close", "complex", "copy", "delete", "func", "if", "imag", "len", "make",
+        "new", "panic", "print", "println", "real", "recover", "return", "switch",
+    ];
+    for cap in call_re.captures_iter(source) {
+        let name_match = cap.get(1).unwrap();
+        let name = name_match.as_str();
+        let line = line_for(source, name_match.start());
+        let line_text = source
+            .lines()
+            .nth(line.saturating_sub(1) as usize)
+            .unwrap_or_default()
+            .trim_start();
+        if keywords.contains(&name)
+            || line_text.starts_with("func ")
+            || line_text.starts_with("type ")
+        {
+            continue;
+        }
+        if let Some(caller) = nodes
+            .iter()
+            .filter(|n| matches!(n.kind, NodeKind::Function | NodeKind::Method))
+            .rev()
+            .find(|n| n.start_line <= line)
+        {
+            refs_push(
+                refs,
+                &caller.id,
+                name,
+                EdgeKind::Calls,
+                file_path,
+                Language::Go,
+                line,
+                0,
+            );
+        }
+    }
 }
 
 fn extract_rust(

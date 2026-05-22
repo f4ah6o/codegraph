@@ -1,6 +1,7 @@
 # Port Go extraction
 
 Created: 2026-05-17
+Completed: 2026-05-22
 Model: GPT-5 Codex
 
 ## 背景
@@ -24,3 +25,9 @@ original は Go の function、method、import 抽出を持つ。Rust `cgz` で 
 - Go fixture tests
 - `cargo test --all --all-features`
 
+## 解決方法
+
+- Go 専用 extractor を registry に追加し、generic extraction から分離した。
+- package、struct、interface、top-level function、receiver method を抽出し、receiver method は `Receiver.Method` の qualified name として保持した。
+- single/grouped/aliased/dot/blank import を import node と `Imports` unresolved refs として記録した。
+- Go call reference fixture を追加し、`cargo test --all --all-features` で確認した。

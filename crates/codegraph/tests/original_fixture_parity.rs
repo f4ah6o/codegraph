@@ -17,6 +17,7 @@ fn harness_can_assert_extractor_registry_dispatch() {
         "typescript_javascript"
     );
     assert_eq!(registered_extractor_name(Language::Python), "python");
+    assert_eq!(registered_extractor_name(Language::Go), "go");
 }
 
 #[test]
@@ -178,6 +179,85 @@ def calculate_total(items: list, tax_rate: float) -> float:
         .signature
         .as_deref()
         .is_some_and(|signature| signature.contains("@app.get")));
+}
+
+#[test]
+fn harness_extracts_go_functions_methods_imports_and_calls() {
+    let fixture = OriginalSourceFixture::new(
+        "server.go",
+        r#"
+package server
+
+import "net/http"
+import alias "example.com/project/pkg"
+import (
+    "fmt"
+    . "strings"
+    _ "embed"
+)
+
+type Server struct {
+    mux *http.ServeMux
+}
+
+type Handler interface {
+    ServeHTTP(http.ResponseWriter, *http.Request)
+}
+
+func NewServer() *Server {
+    fmt.Println(alias.Name)
+    return &Server{}
+}
+
+func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+    TrimSpace(r.URL.Path)
+    s.mux.ServeHTTP(w, r)
+}
+"#,
+    );
+
+    assert_eq!(fixture.language(), Language::Go);
+    fixture.assert_node(NodeKind::Module, "server");
+    fixture.assert_node(NodeKind::Struct, "Server");
+    fixture.assert_node(NodeKind::Interface, "Handler");
+    fixture.assert_node(NodeKind::Function, "NewServer");
+    fixture.assert_node(NodeKind::Method, "ServeHTTP");
+    fixture.assert_node(NodeKind::Import, "net/http");
+    fixture.assert_node(NodeKind::Import, "example.com/project/pkg");
+    fixture.assert_node(NodeKind::Import, "fmt");
+    fixture.assert_node(NodeKind::Import, "strings");
+    fixture.assert_node(NodeKind::Import, "embed");
+    fixture.assert_reference(EdgeKind::Imports, "net/http");
+    fixture.assert_reference(EdgeKind::Imports, "example.com/project/pkg");
+    fixture.assert_reference(EdgeKind::Imports, "fmt");
+    fixture.assert_reference(EdgeKind::Imports, "strings");
+    fixture.assert_reference(EdgeKind::Imports, "embed");
+    fixture.assert_reference(EdgeKind::Calls, "fmt.Println");
+    fixture.assert_reference(EdgeKind::Calls, "TrimSpace");
+    fixture.assert_reference(EdgeKind::Calls, "s.mux.ServeHTTP");
+
+    let method = fixture
+        .result()
+        .nodes
+        .iter()
+        .find(|node| node.kind == NodeKind::Method && node.name == "ServeHTTP")
+        .unwrap();
+    assert_eq!(method.qualified_name, "Server.ServeHTTP");
+    assert!(method
+        .signature
+        .as_deref()
+        .is_some_and(|signature| signature.contains("func (s *Server) ServeHTTP")));
+
+    let aliased_import = fixture
+        .result()
+        .nodes
+        .iter()
+        .find(|node| node.kind == NodeKind::Import && node.name == "example.com/project/pkg")
+        .unwrap();
+    assert!(aliased_import
+        .signature
+        .as_deref()
+        .is_some_and(|signature| signature.starts_with("import alias")));
 }
 
 #[test]
