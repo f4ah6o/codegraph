@@ -152,6 +152,7 @@ impl CodeGraph {
 
     pub fn build_affected_report(&self, files: &[String]) -> Result<AffectedReport> {
         let indexed_files = self.get_all_files()?;
+        let moonbit_packages = MoonBitPackageGraph::from_root(&self.root, &indexed_files);
         let mut affected = BTreeSet::new();
         let mut debug = Vec::new();
         let mut warnings = Vec::new();
@@ -167,6 +168,7 @@ impl CodeGraph {
                         direct_test_input: vec![file.clone()],
                         import_dependents: Vec::new(),
                         moonbit_same_package: Vec::new(),
+                        moonbit_package_dependents: Vec::new(),
                         rust_name_heuristic: Vec::new(),
                         rust_workspace_heuristic: Vec::new(),
                     },
@@ -191,6 +193,14 @@ impl CodeGraph {
                 matched.insert(test.clone());
                 affected.insert(test.clone());
             }
+            let moonbit_package_tests: BTreeSet<String> = moonbit_packages
+                .dependent_package_tests(file)
+                .into_iter()
+                .collect();
+            for test in &moonbit_package_tests {
+                matched.insert(test.clone());
+                affected.insert(test.clone());
+            }
             let rust_tests: BTreeSet<String> = rust_name_heuristic_tests(file, &indexed_files)
                 .into_iter()
                 .collect();
@@ -209,21 +219,22 @@ impl CodeGraph {
 
             if matched.is_empty() {
                 warnings.push(format!(
-                    "{file}: no import-dependent tests, MoonBit same-package tests, Rust name-heuristic tests, or Rust workspace tests found"
+                    "{file}: no import-dependent tests, MoonBit same-package tests, MoonBit package-dependent tests, Rust name-heuristic tests, or Rust workspace tests found"
                 ));
             }
             debug.push(AffectedDebugEntry {
                 changed_file: file.clone(),
                 reason: if matched.is_empty() {
-                    "no import-dependent tests, MoonBit same-package tests, Rust name-heuristic tests, or Rust workspace tests found".to_string()
+                    "no import-dependent tests, MoonBit same-package tests, MoonBit package-dependent tests, Rust name-heuristic tests, or Rust workspace tests found".to_string()
                 } else {
-                    "matched import-dependent tests, MoonBit same-package tests, Rust name-heuristic tests, and/or Rust workspace tests".to_string()
+                    "matched import-dependent tests, MoonBit same-package tests, MoonBit package-dependent tests, Rust name-heuristic tests, and/or Rust workspace tests".to_string()
                 },
                 matched_tests: matched.into_iter().collect(),
                 matched_by: AffectedMatchSources {
                     direct_test_input: Vec::new(),
                     import_dependents: import_dependents.into_iter().collect(),
                     moonbit_same_package: moonbit_tests.into_iter().collect(),
+                    moonbit_package_dependents: moonbit_package_tests.into_iter().collect(),
                     rust_name_heuristic: rust_tests.into_iter().collect(),
                     rust_workspace_heuristic: rust_workspace_tests.into_iter().collect(),
                 },
@@ -581,21 +592,194 @@ fn moonbit_same_package_tests(file: &str, indexed_files: &[FileRecord]) -> Vec<S
         .collect()
 }
 
+#[derive(Debug, Default)]
+struct MoonBitPackageGraph {
+    package_by_dir: BTreeMap<String, MoonBitPackage>,
+    reverse_imports: BTreeMap<String, BTreeSet<String>>,
+}
+
+#[derive(Debug)]
+struct MoonBitPackage {
+    name: String,
+    imports: Vec<String>,
+    tests: Vec<String>,
+}
+
+impl MoonBitPackageGraph {
+    fn from_root(root: &Path, indexed_files: &[FileRecord]) -> Self {
+        let module_name = moonbit_module_name(root, indexed_files);
+        let mut package_by_dir = BTreeMap::new();
+
+        for record in indexed_files {
+            if !is_moonbit_package_file(&record.path) {
+                continue;
+            }
+            let dir = parent_dir(&record.path);
+            let source = fs::read_to_string(root.join(&record.path)).unwrap_or_default();
+            let (name, imports) = parse_moonbit_package_metadata(&source);
+            let package_name =
+                name.unwrap_or_else(|| moonbit_package_name_from_dir(module_name.as_deref(), &dir));
+            package_by_dir.insert(
+                dir.clone(),
+                MoonBitPackage {
+                    name: package_name,
+                    imports,
+                    tests: Vec::new(),
+                },
+            );
+        }
+
+        let package_dirs: Vec<String> = package_by_dir.keys().cloned().collect();
+        for record in indexed_files {
+            if record.language != Language::MoonBit || !is_test_file(&record.path) {
+                continue;
+            }
+            if let Some(package_dir) = moonbit_package_dir_from_dirs(&record.path, &package_dirs) {
+                if let Some(package) = package_by_dir.get_mut(&package_dir) {
+                    package.tests.push(record.path.clone());
+                }
+            }
+        }
+
+        let local_names: BTreeSet<String> = package_by_dir
+            .values()
+            .map(|package| package.name.clone())
+            .collect();
+        let mut reverse_imports: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        for package in package_by_dir.values() {
+            for import in &package.imports {
+                if local_names.contains(import) {
+                    reverse_imports
+                        .entry(import.clone())
+                        .or_default()
+                        .insert(package.name.clone());
+                }
+            }
+        }
+
+        Self {
+            package_by_dir,
+            reverse_imports,
+        }
+    }
+
+    fn dependent_package_tests(&self, file: &str) -> Vec<String> {
+        if is_test_file(file) || !is_moonbit_source_file(file) {
+            return Vec::new();
+        }
+        let Some(changed_package) = self.package_for_file(file) else {
+            return Vec::new();
+        };
+
+        let mut pending: Vec<String> = self
+            .reverse_imports
+            .get(&changed_package.name)
+            .map(|deps| deps.iter().cloned().collect())
+            .unwrap_or_default();
+        let mut dependent_names = BTreeSet::new();
+        while let Some(package_name) = pending.pop() {
+            if !dependent_names.insert(package_name.clone()) {
+                continue;
+            }
+            if let Some(next) = self.reverse_imports.get(&package_name) {
+                pending.extend(next.iter().cloned());
+            }
+        }
+
+        self.package_by_dir
+            .values()
+            .filter(|package| dependent_names.contains(&package.name))
+            .flat_map(|package| package.tests.clone())
+            .collect()
+    }
+
+    fn package_for_file(&self, file: &str) -> Option<&MoonBitPackage> {
+        let package_dir = moonbit_package_dir_from_dirs(file, self.package_by_dir.keys())?;
+        self.package_by_dir.get(&package_dir)
+    }
+}
+
+fn moonbit_module_name(root: &Path, indexed_files: &[FileRecord]) -> Option<String> {
+    indexed_files
+        .iter()
+        .filter(|record| record.path.ends_with("moon.mod.json"))
+        .min_by_key(|record| record.path.matches('/').count())
+        .and_then(|record| fs::read_to_string(root.join(&record.path)).ok())
+        .and_then(|source| {
+            serde_json::from_str::<serde_json::Value>(&source)
+                .ok()
+                .and_then(|json| {
+                    json.get("name")
+                        .and_then(|value| value.as_str())
+                        .map(str::to_string)
+                })
+        })
+}
+
+fn parse_moonbit_package_metadata(source: &str) -> (Option<String>, Vec<String>) {
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(source) else {
+        return (None, Vec::new());
+    };
+    let name = json
+        .get("name")
+        .and_then(|value| value.as_str())
+        .map(str::to_string);
+    let mut imports = Vec::new();
+    if let Some(value) = json.get("import").or_else(|| json.get("imports")) {
+        collect_moonbit_imports(value, &mut imports);
+    }
+    (name, imports)
+}
+
+fn collect_moonbit_imports(value: &serde_json::Value, imports: &mut Vec<String>) {
+    match value {
+        serde_json::Value::String(import) => imports.push(import.clone()),
+        serde_json::Value::Array(values) => {
+            for value in values {
+                collect_moonbit_imports(value, imports);
+            }
+        }
+        serde_json::Value::Object(values) => {
+            for (alias, value) in values {
+                imports.push(value.as_str().unwrap_or(alias).to_string());
+            }
+        }
+        _ => {}
+    }
+}
+
+fn moonbit_package_name_from_dir(module_name: Option<&str>, dir: &str) -> String {
+    match (module_name, dir.is_empty()) {
+        (Some(module), true) => module.to_string(),
+        (Some(module), false) => format!("{module}/{dir}"),
+        (None, true) => "moonbit-package".to_string(),
+        (None, false) => dir.to_string(),
+    }
+}
+
 fn is_moonbit_source_file(file: &str) -> bool {
     file.ends_with(".mbt") || file.ends_with(".mbti") || file.ends_with(".mbt.md")
 }
 
+fn is_moonbit_package_file(file: &str) -> bool {
+    file.ends_with("moon.pkg.json") || file.ends_with("moon.pkg")
+}
+
 fn moonbit_package_dir(file: &str, indexed_files: &[FileRecord]) -> Option<String> {
+    let dirs: Vec<String> = indexed_files
+        .iter()
+        .filter(|record| is_moonbit_package_file(&record.path))
+        .map(|record| parent_dir(&record.path))
+        .collect();
+    moonbit_package_dir_from_dirs(file, &dirs)
+}
+
+fn moonbit_package_dir_from_dirs<'a, I>(file: &str, dirs: I) -> Option<String>
+where
+    I: IntoIterator<Item = &'a String>,
+{
     let mut best: Option<&str> = None;
-    for record in indexed_files {
-        if !record.path.ends_with("moon.pkg.json") && !record.path.ends_with("moon.pkg") {
-            continue;
-        }
-        let dir = record
-            .path
-            .rsplit_once('/')
-            .map(|(dir, _)| dir)
-            .unwrap_or("");
+    for dir in dirs {
         if (dir.is_empty() || file == dir || file.starts_with(&format!("{dir}/")))
             && best
                 .map(|current| dir.len() > current.len())
@@ -605,6 +789,12 @@ fn moonbit_package_dir(file: &str, indexed_files: &[FileRecord]) -> Option<Strin
         }
     }
     best.map(str::to_string)
+}
+
+fn parent_dir(file: &str) -> String {
+    file.rsplit_once('/')
+        .map(|(dir, _)| dir.to_string())
+        .unwrap_or_default()
 }
 
 fn rust_name_heuristic_tests(file: &str, indexed_files: &[FileRecord]) -> Vec<String> {

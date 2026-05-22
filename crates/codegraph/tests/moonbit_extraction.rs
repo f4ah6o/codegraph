@@ -399,6 +399,121 @@ fn affected_includes_moonbit_same_package_tests() {
 }
 
 #[test]
+fn affected_includes_moonbit_dependent_package_tests() {
+    let dir = TempDir::new().unwrap();
+    fs::write(
+        dir.path().join("moon.mod.json"),
+        r#"{"name":"example/app"}"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("moon.pkg.json"),
+        r#"{"import":["example/app/runtime"]}"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("app.mbt"),
+        "pub fn run() -> Int { @runtime.vm() }\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("app_test.mbt"),
+        "test { inspect(run(), content=\"1\") }\n",
+    )
+    .unwrap();
+    fs::create_dir_all(dir.path().join("runtime")).unwrap();
+    fs::write(
+        dir.path().join("runtime/moon.pkg.json"),
+        r#"{"import":["example/app/engine"]}"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("runtime/runtime_state.mbt"),
+        "pub fn vm() -> Int { @engine.parse() }\n",
+    )
+    .unwrap();
+    fs::create_dir_all(dir.path().join("engine")).unwrap();
+    fs::write(dir.path().join("engine/moon.pkg.json"), "{}").unwrap();
+    fs::write(
+        dir.path().join("engine/parser.mbt"),
+        "pub fn parse() -> Int { 1 }\n",
+    )
+    .unwrap();
+    fs::create_dir_all(dir.path().join("other")).unwrap();
+    fs::write(dir.path().join("other/moon.pkg.json"), "{}").unwrap();
+    fs::write(
+        dir.path().join("other/other_test.mbt"),
+        "test { inspect(1, content=\"1\") }\n",
+    )
+    .unwrap();
+
+    let project = dir.path().to_str().unwrap();
+    run(&["init", project, "--index"]);
+
+    let runtime_output = run(&[
+        "affected",
+        "runtime/runtime_state.mbt",
+        "--path",
+        project,
+        "--json",
+    ]);
+    let runtime: Value = serde_json::from_str(&runtime_output).unwrap();
+    assert!(
+        runtime["affectedTests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|test| test == "app_test.mbt"),
+        "{runtime_output}"
+    );
+    assert!(
+        runtime["debug"].as_array().unwrap().iter().any(|entry| {
+            entry["changedFile"] == "runtime/runtime_state.mbt"
+                && entry["matchedBy"]["moonbitPackageDependents"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|test| test == "app_test.mbt")
+        }),
+        "{runtime_output}"
+    );
+    assert!(
+        !runtime["affectedTests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|test| test == "other/other_test.mbt"),
+        "{runtime_output}"
+    );
+
+    let engine_output = run(&["affected", "engine/parser.mbt", "--path", project, "--json"]);
+    let engine: Value = serde_json::from_str(&engine_output).unwrap();
+    assert!(
+        engine["affectedTests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|test| test == "app_test.mbt"),
+        "{engine_output}"
+    );
+    assert!(
+        engine["debug"].as_array().unwrap().iter().any(|entry| {
+            entry["changedFile"] == "engine/parser.mbt"
+                && entry["matchedBy"]["moonbitPackageDependents"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|test| test == "app_test.mbt")
+        }),
+        "{engine_output}"
+    );
+    assert!(
+        engine["warnings"].as_array().unwrap().is_empty(),
+        "{engine_output}"
+    );
+}
+
+#[test]
 fn affected_keeps_direct_moonbit_test_input() {
     let dir = TempDir::new().unwrap();
     fs::write(
