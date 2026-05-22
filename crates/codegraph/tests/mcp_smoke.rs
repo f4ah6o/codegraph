@@ -10,7 +10,7 @@ fn mcp_lists_and_calls_status() {
     fs::create_dir_all(dir.path().join("src")).unwrap();
     fs::write(
         dir.path().join("src/lib.rs"),
-        "pub fn helper() {}\npub fn process_data() { helper(); }\n",
+        "pub struct ProcessData;\npub fn helper() {}\npub fn process_data() { helper(); }\n",
     )
     .unwrap();
     fs::write(
@@ -155,6 +155,40 @@ fn mcp_lists_and_calls_status() {
             })
         )
         .unwrap();
+        writeln!(
+            stdin,
+            "{}",
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 9,
+                "method": "tools/call",
+                "params": {
+                    "name": "codegraph_search",
+                    "arguments": {
+                        "query": "ProcessData",
+                        "kind": "struct"
+                    }
+                }
+            })
+        )
+        .unwrap();
+        writeln!(
+            stdin,
+            "{}",
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 10,
+                "method": "tools/call",
+                "params": {
+                    "name": "codegraph_search",
+                    "arguments": {
+                        "query": "ProcessData",
+                        "kind": "function"
+                    }
+                }
+            })
+        )
+        .unwrap();
     }
 
     drop(child.stdin.take());
@@ -171,6 +205,25 @@ fn mcp_lists_and_calls_status() {
     assert!(tools
         .iter()
         .any(|tool| tool["name"] == "codegraph_affected"));
+    let search_tool = tools
+        .iter()
+        .find(|tool| tool["name"] == "codegraph_search")
+        .unwrap();
+    assert_eq!(
+        search_tool["inputSchema"]["properties"]["limit"]["default"],
+        10
+    );
+    assert!(search_tool["inputSchema"]["properties"]["kind"]["enum"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|kind| kind == "function"));
+    assert!(
+        search_tool["inputSchema"]["properties"]["projectPath"]["description"]
+            .as_str()
+            .unwrap()
+            .contains("not cached")
+    );
     let status_text = responses[2]["result"]["content"][0]["text"]
         .as_str()
         .unwrap();
@@ -223,4 +276,57 @@ fn mcp_lists_and_calls_status() {
     );
     assert!(explore_text.contains("Budget:"), "{explore_text}");
     assert!(explore_text.contains("process_data"), "{explore_text}");
+    let struct_search_text = responses[8]["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap();
+    assert!(
+        struct_search_text.contains("struct ProcessData"),
+        "{struct_search_text}"
+    );
+    let function_search_text = responses[9]["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap();
+    assert!(
+        function_search_text.contains("No results found"),
+        "{function_search_text}"
+    );
+}
+
+#[test]
+fn mcp_uninitialized_project_error_is_actionable() {
+    let dir = TempDir::new().unwrap();
+    let bin = env!("CARGO_BIN_EXE_cgz");
+    let mut child = Command::new(bin)
+        .args(["serve", "--mcp", "--path", dir.path().to_str().unwrap()])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    {
+        let stdin = child.stdin.as_mut().unwrap();
+        writeln!(
+            stdin,
+            "{}",
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "codegraph_status",
+                    "arguments": {}
+                }
+            })
+        )
+        .unwrap();
+    }
+
+    drop(child.stdin.take());
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let response: Value = serde_json::from_str(stdout.lines().next().unwrap()).unwrap();
+    let message = response["error"]["message"].as_str().unwrap();
+    assert!(message.contains("cgz init --index"), "{message}");
+    assert!(message.contains("projectPath"), "{message}");
 }

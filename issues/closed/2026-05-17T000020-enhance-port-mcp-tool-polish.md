@@ -1,6 +1,7 @@
 # Polish MCP tools toward original behavior
 
 Created: 2026-05-17
+Completed: 2026-05-22
 Model: GPT-5 Codex
 
 ## 背景
@@ -25,3 +26,10 @@ Rust `cgz` は MCP server を持つが、original の tool schema、dynamic desc
 - `cargo test -p cgz --test mcp_smoke`
 - `cargo test --all --all-features`
 
+## 解決方法
+
+- MCP tool schema に property description、default、enum、min/max bounds を追加し、各 tool の入力契約を明確にした。
+- `codegraph_search` の `kind` option を `NodeKind` に parse して `SearchOptions` に渡すようにし、不正な kind は actionable error にした。
+- initialized でない project の error に `cgz init --index` と `projectPath` の案内を含め、`projectPath` 指定時も初期化済み project を求める文言にした。
+- server instructions と `projectPath` schema description に cross-project query は call 単位で扱い、cross-project result cache を持たないことを明記した。
+- MCP smoke test で schema metadata、kind filter、uninitialized project error を検証し、`cargo test --all --all-features` で確認した。

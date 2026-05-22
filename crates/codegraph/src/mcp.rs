@@ -1,14 +1,14 @@
 use crate::types::{
-    FileListFormat, FileListOptions, FileListReport, Node, NodeEdge, SearchOptions,
+    FileListFormat, FileListOptions, FileListReport, Node, NodeEdge, NodeKind, SearchOptions,
 };
 use crate::{find_nearest_codegraph_root, CodeGraph};
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use serde_json::{json, Value};
 use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
-const SERVER_INSTRUCTIONS: &str = "# Codegraph — code intelligence over an indexed knowledge graph\n\nStart with codegraph_status to check index health. Use codegraph_files, codegraph_search, codegraph_context, codegraph_callers/codegraph_callees, codegraph_impact, codegraph_node, and codegraph_explore for read-only exploration. Treat results as navigation context, not correctness proof; final validation still comes from the target repo's tests, type checks, linters, or build commands. Do not initialize or reindex a project unless the user explicitly asks for that workspace-changing action.";
+const SERVER_INSTRUCTIONS: &str = "# Codegraph — code intelligence over an indexed knowledge graph\n\nStart with codegraph_status to check index health. Use codegraph_files, codegraph_search, codegraph_context, codegraph_callers/codegraph_callees, codegraph_impact, codegraph_node, and codegraph_explore for read-only exploration. Treat results as navigation context, not correctness proof; final validation still comes from the target repo's tests, type checks, linters, or build commands. Do not initialize or reindex a project unless the user explicitly asks for that workspace-changing action.\n\nCross-project policy: each tool call may pass projectPath to query that initialized CodeGraph project directly. The server does not maintain a cross-project result cache; switching projectPath changes only that call.";
 
 pub struct MCPServer {
     project_path: Option<PathBuf>,
@@ -98,6 +98,9 @@ impl MCPServer {
     }
 
     fn execute_tool(&self, name: &str, args: &Value) -> Result<Value> {
+        if !is_known_tool(name) {
+            return Err(anyhow!("Unknown tool: {name}"));
+        }
         let cg = self.open_project(args)?;
         match name {
             "codegraph_search" => {
@@ -107,10 +110,12 @@ impl MCPServer {
                     1,
                     100,
                 );
+                let kind = optional_node_kind(args, "kind")?;
                 let results = cg.search_nodes(
                     query,
                     SearchOptions {
                         limit,
+                        kind,
                         ..Default::default()
                     },
                 )?;
@@ -345,15 +350,31 @@ impl MCPServer {
 
     fn open_project(&self, args: &Value) -> Result<CodeGraph> {
         if let Some(path) = args.get("projectPath").and_then(Value::as_str) {
-            return CodeGraph::open(path);
+            return CodeGraph::open(path).with_context(|| {
+                format!(
+                    "Unable to open projectPath `{path}`. Run `cgz init {path}` first or pass the path to an initialized project."
+                )
+            });
         }
         let start = self
             .project_path
             .clone()
             .unwrap_or(std::env::current_dir()?);
         let root = find_nearest_codegraph_root(&start)
-            .ok_or_else(|| anyhow!("CodeGraph not initialized in {}", start.display()))?;
-        CodeGraph::open(root)
+            .ok_or_else(|| {
+                anyhow!(
+                    "CodeGraph is not initialized for `{}`. Run `cgz init --index {}` or pass projectPath for an initialized project.",
+                    start.display(),
+                    start.display()
+                )
+            })?;
+        CodeGraph::open(&root).with_context(|| {
+            format!(
+                "Unable to open initialized CodeGraph project `{}`. Re-run `cgz init --index {}` if the index is missing or corrupt.",
+                root.display(),
+                root.display()
+            )
+        })
     }
 }
 
@@ -361,68 +382,86 @@ fn tools() -> Value {
     json!([
         tool(
             "codegraph_search",
-            "Quick symbol search by name.",
-            json!({"query": {"type":"string"}, "kind": {"type":"string"}, "limit": {"type":"number"}, "projectPath": {"type":"string"}}),
+            "Quick symbol/file search. Use kind to narrow results when looking for a specific node type.",
+            json!({
+                "query": string_prop("Search text matched against symbol names, qualified names, signatures, and file paths."),
+                "kind": enum_prop("Optional node kind filter.", NODE_KIND_VALUES),
+                "limit": number_prop("Maximum results to return.", 10, 1, 100),
+                "projectPath": project_path_prop()
+            }),
             vec!["query"]
         ),
         tool(
             "codegraph_context",
-            "Build comprehensive context for a task.",
-            json!({"task": {"type":"string"}, "maxNodes": {"type":"number"}, "includeCode": {"type":"boolean"}, "format": {"type":"string", "enum":["text", "json"]}, "projectPath": {"type":"string"}}),
+            "Build task-oriented context from matching symbols and files.",
+            json!({
+                "task": string_prop("Natural-language task, symbol, or file term to investigate."),
+                "maxNodes": number_prop("Maximum matched nodes to include.", 20, 1, 200),
+                "includeCode": bool_prop("Include source snippets for matched nodes.", true),
+                "format": enum_prop_with_default("Output format.", &["text", "json"], "text"),
+                "projectPath": project_path_prop()
+            }),
             vec!["task"]
         ),
         tool(
             "codegraph_callers",
             "Find all functions/methods that call a specific symbol.",
-            json!({"symbol": {"type":"string"}, "depth": {"type":"number"}, "limit": {"type":"number"}, "projectPath": {"type":"string"}}),
+            json!({"symbol": string_prop("Symbol name to resolve."), "depth": number_prop("Traversal depth.", 2, 1, 10), "limit": number_prop("Maximum results.", 20, 1, 100), "projectPath": project_path_prop()}),
             vec!["symbol"]
         ),
         tool(
             "codegraph_callees",
             "Find all functions/methods that a specific symbol calls.",
-            json!({"symbol": {"type":"string"}, "depth": {"type":"number"}, "limit": {"type":"number"}, "projectPath": {"type":"string"}}),
+            json!({"symbol": string_prop("Symbol name to resolve."), "depth": number_prop("Traversal depth.", 2, 1, 10), "limit": number_prop("Maximum results.", 20, 1, 100), "projectPath": project_path_prop()}),
             vec!["symbol"]
         ),
         tool(
             "codegraph_impact",
             "Analyze the impact radius of changing a symbol.",
-            json!({"symbol": {"type":"string"}, "depth": {"type":"number"}, "limit": {"type":"number"}, "projectPath": {"type":"string"}}),
+            json!({"symbol": string_prop("Symbol name to resolve."), "depth": number_prop("Traversal depth.", 2, 1, 10), "limit": number_prop("Maximum impacted nodes.", 50, 1, 200), "projectPath": project_path_prop()}),
             vec!["symbol"]
         ),
         tool(
             "codegraph_paths",
             "Find bounded dependency/call paths between two symbols.",
-            json!({"from": {"type":"string"}, "to": {"type":"string"}, "depth": {"type":"number"}, "limit": {"type":"number"}, "projectPath": {"type":"string"}}),
+            json!({"from": string_prop("Start symbol."), "to": string_prop("Target symbol."), "depth": number_prop("Maximum path depth.", 4, 1, 10), "limit": number_prop("Maximum paths.", 5, 1, 50), "projectPath": project_path_prop()}),
             vec!["from", "to"]
         ),
         tool(
             "codegraph_node",
             "Get detailed information about a specific code symbol.",
-            json!({"symbol": {"type":"string"}, "includeCode": {"type":"boolean"}, "projectPath": {"type":"string"}}),
+            json!({"symbol": string_prop("Symbol name to resolve."), "includeCode": bool_prop("Include source snippet.", false), "projectPath": project_path_prop()}),
             vec!["symbol"]
         ),
         tool(
             "codegraph_explore",
             "Deep exploration tool for a topic. Returns grouped source sections, relationship map, additional relevant files, and truncation notices. Budget guidance: small projects usually need 1-2 calls; medium projects need a few targeted calls; large projects should use narrow symbol/file queries.",
-            json!({"query": {"type":"string"}, "maxFiles": {"type":"number", "minimum": 1, "maximum": 20}, "projectPath": {"type":"string"}}),
+            json!({"query": string_prop("Topic, symbol, or file term to explore."), "maxFiles": number_prop("Maximum source files to include.", 12, 1, 20), "projectPath": project_path_prop()}),
             vec!["query"]
         ),
         tool(
             "codegraph_status",
-            "Get the status of the CodeGraph index.",
-            json!({"projectPath": {"type":"string"}}),
+            "Get index health and staleness for the selected initialized project.",
+            json!({"projectPath": project_path_prop()}),
             vec![]
         ),
         tool(
             "codegraph_files",
             "Get indexed project files.",
-            json!({"path": {"type":"string"}, "pattern": {"type":"string"}, "format": {"type":"string"}, "includeMetadata": {"type":"boolean"}, "maxDepth": {"type":"number"}, "projectPath": {"type":"string"}}),
+            json!({
+                "path": string_prop("Optional path prefix filter."),
+                "pattern": string_prop("Optional glob-like pattern such as *.rs."),
+                "format": enum_prop_with_default("Output layout.", &["tree", "flat", "grouped"], "tree"),
+                "includeMetadata": bool_prop("Include file size and timestamps.", false),
+                "maxDepth": number_prop("Maximum file path depth.", 20, 1, 20),
+                "projectPath": project_path_prop()
+            }),
             vec![]
         ),
         tool(
             "codegraph_affected",
             "Return affected test candidates for changed files.",
-            json!({"files": {"type":"array", "items": {"type":"string"}}, "projectPath": {"type":"string"}}),
+            json!({"files": {"type":"array", "items": {"type":"string"}, "description": "Changed file paths relative to the project root."}, "projectPath": project_path_prop()}),
             vec!["files"]
         ),
     ])
@@ -438,6 +477,78 @@ fn tool(name: &str, description: &str, properties: Value, required: Vec<&str>) -
             "required": required,
         }
     })
+}
+
+const NODE_KIND_VALUES: &[&str] = &[
+    "file",
+    "module",
+    "class",
+    "struct",
+    "interface",
+    "trait",
+    "protocol",
+    "function",
+    "method",
+    "property",
+    "field",
+    "variable",
+    "constant",
+    "enum",
+    "enum_member",
+    "type_alias",
+    "namespace",
+    "parameter",
+    "import",
+    "export",
+    "route",
+    "component",
+];
+
+fn string_prop(description: &str) -> Value {
+    json!({"type": "string", "description": description})
+}
+
+fn bool_prop(description: &str, default: bool) -> Value {
+    json!({"type": "boolean", "description": description, "default": default})
+}
+
+fn number_prop(description: &str, default: i64, minimum: i64, maximum: i64) -> Value {
+    json!({
+        "type": "number",
+        "description": description,
+        "default": default,
+        "minimum": minimum,
+        "maximum": maximum
+    })
+}
+
+fn enum_prop(description: &str, values: &[&str]) -> Value {
+    json!({"type": "string", "description": description, "enum": values})
+}
+
+fn enum_prop_with_default(description: &str, values: &[&str], default: &str) -> Value {
+    json!({"type": "string", "description": description, "enum": values, "default": default})
+}
+
+fn project_path_prop() -> Value {
+    string_prop("Optional path to an initialized CodeGraph project. Applies only to this tool call; results are not cached across projectPath values.")
+}
+
+fn is_known_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "codegraph_search"
+            | "codegraph_context"
+            | "codegraph_callers"
+            | "codegraph_callees"
+            | "codegraph_impact"
+            | "codegraph_paths"
+            | "codegraph_node"
+            | "codegraph_explore"
+            | "codegraph_status"
+            | "codegraph_files"
+            | "codegraph_affected"
+    )
 }
 
 fn project_path_from_initialize(message: &Value) -> Option<PathBuf> {
@@ -497,6 +608,46 @@ fn required_string_array(args: &Value, key: &str) -> Result<Vec<String>> {
         out.push(item.to_string());
     }
     Ok(out)
+}
+
+fn optional_node_kind(args: &Value, key: &str) -> Result<Option<NodeKind>> {
+    let Some(kind) = args.get(key).and_then(Value::as_str) else {
+        return Ok(None);
+    };
+    if kind.is_empty() {
+        return Ok(None);
+    }
+    let node_kind = match kind {
+        "file" => NodeKind::File,
+        "module" => NodeKind::Module,
+        "class" => NodeKind::Class,
+        "struct" => NodeKind::Struct,
+        "interface" => NodeKind::Interface,
+        "trait" => NodeKind::Trait,
+        "protocol" => NodeKind::Protocol,
+        "function" => NodeKind::Function,
+        "method" => NodeKind::Method,
+        "property" => NodeKind::Property,
+        "field" => NodeKind::Field,
+        "variable" => NodeKind::Variable,
+        "constant" => NodeKind::Constant,
+        "enum" => NodeKind::Enum,
+        "enum_member" => NodeKind::EnumMember,
+        "type_alias" => NodeKind::TypeAlias,
+        "namespace" => NodeKind::Namespace,
+        "parameter" => NodeKind::Parameter,
+        "import" => NodeKind::Import,
+        "export" => NodeKind::Export,
+        "route" => NodeKind::Route,
+        "component" => NodeKind::Component,
+        _ => {
+            return Err(anyhow!(
+                "{key} must be one of: {}",
+                NODE_KIND_VALUES.join(", ")
+            ))
+        }
+    };
+    Ok(Some(node_kind))
 }
 
 fn clamp(value: i64, min: i64, max: i64) -> i64 {
